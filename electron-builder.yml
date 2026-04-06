@@ -74,4 +74,4 @@ dmg:
 publish:
   provider: github
   owner: ever-just
-  repo: TextMyAgent
+  repo: textmyagent-desktop

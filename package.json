@@ -1,6 +1,6 @@
 {
   "name": "textmyagent-desktop",
-  "version": "1.6.0-alpha.1",
+  "version": "1.6.0",
   "description": "AI Assistant for iMessage - Desktop App",
   "main": "dist/electron/main.js",
   "scripts": {
@@ -44,6 +44,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ever-just/TextMyAgent.git"
+    "url": "https://github.com/ever-just/textmyagent-desktop.git"
   }
 }
