@@ -183,7 +183,8 @@ export class AgentService extends EventEmitter {
       log('info', 'Processing message', {
         from: userHandle,
         chatGuid,
-        preview: message.text.substring(0, 50),
+        messageLength: message.text.length,
+        preview: message.text.substring(0, 100),
       });
 
       // Always fetch recent history for time awareness context
@@ -308,8 +309,12 @@ export class AgentService extends EventEmitter {
       // If agent called 'wait' tool, skip sending a text response entirely
       if (response && response.toolsUsed?.includes('wait')) {
         log('info', 'Agent chose to wait — no text response sent', {
+          from: userHandle,
           chatGuid,
-          toolsUsed: response.toolsUsed,
+          toolsUsed: response.toolsUsed?.join(', '),
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          userMessagePreview: message.text.substring(0, 80),
         });
         // Save user message to DB even if we didn't respond
         this.saveMessageToDb(chatGuid, userHandle, message.text, '');
@@ -367,12 +372,17 @@ export class AgentService extends EventEmitter {
 
           log('info', 'Response sent', {
             to: userHandle,
-            preview: fullResponse.substring(0, 50),
-            tokens: response.inputTokens + response.outputTokens,
+            chatGuid,
+            preview: fullResponse.substring(0, 100),
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            totalTokens: response.inputTokens + response.outputTokens,
+            toolsUsed: response.toolsUsed?.join(', ') || 'none',
             chunks: formatted.chunks.length,
             wasTruncated: formatted.wasTruncated,
             originalLength: formatted.originalLength,
             processedLength: formatted.processedLength,
+            typingDelayMs,
           });
 
           this.emit('messageSent', {
@@ -390,7 +400,13 @@ export class AgentService extends EventEmitter {
 
       // Note: Mark as read requires Private API, skipping
     } catch (error: any) {
-      log('error', 'Error processing message', { error: error.message });
+      log('error', 'Error processing message', {
+        error: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join(' | '),
+        from: userHandle,
+        chatGuid,
+        messagePreview: message.text.substring(0, 80),
+      });
       this.emit('error', error);
     } finally {
       this.processingQueue.delete(message.guid);

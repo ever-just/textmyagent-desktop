@@ -114,7 +114,7 @@ router.get('/config', async (_req: Request, res: Response) => {
 });
 
 // Settings key allowlist with expected types (fixes Pre-Phase 0.3)
-const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
+const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean' | 'object'> = {
   // Anthropic
   'anthropic.model': 'string',
   'anthropic.temperature': 'number',
@@ -154,6 +154,13 @@ const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
   'tools.saveUserFact': 'boolean',
   'tools.getUserFacts': 'boolean',
   'tools.searchHistory': 'boolean',
+  'tools.reactions': 'boolean',
+  'tools.waitTool': 'boolean',
+  // Contact allowlist
+  'agent.replyMode': 'string',
+  'agent.allowedContacts': 'object',
+  // Developer
+  'developer.mode': 'boolean',
   // Polling
   'polling.activeIntervalMs': 'number',
   'polling.idleIntervalMs': 'number',

@@ -524,6 +524,8 @@ export function seedDefaultSettings(): void {
     // Contact allowlist
     'agent.replyMode': JSON.stringify('everyone'),
     'agent.allowedContacts': JSON.stringify([]),
+    // Developer
+    'developer.mode': JSON.stringify(false),
     // Polling
     'polling.activeIntervalMs': JSON.stringify(2000),
     'polling.idleIntervalMs': JSON.stringify(5000),

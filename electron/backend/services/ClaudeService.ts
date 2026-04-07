@@ -149,16 +149,22 @@ export class ClaudeService {
 
         lastStopReason = response.stop_reason || 'end_turn';
 
+        // Check if response contains tool_use blocks
+        const toolUseBlocks = response.content.filter((c) => c.type === 'tool_use');
+        const textBlocks = response.content.filter((c) => c.type === 'text');
+
         log('info', `Claude API call #${apiCallCount}`, {
+          model: this.model,
+          maxTokens: this.maxTokens,
+          temperature: this.temperature,
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
           stopReason: response.stop_reason,
           contentBlocks: response.content.length,
+          toolsAvailable: tools.map((t: any) => t.name || t.type).join(', ') || 'none',
+          toolsCalled: toolUseBlocks.map((b: any) => b.name).join(', ') || 'none',
+          textPreview: textBlocks.map((b: any) => b.text).join('').substring(0, 120) || '(no text)',
         });
-
-        // Check if response contains tool_use blocks
-        const toolUseBlocks = response.content.filter((c) => c.type === 'tool_use');
-        const textBlocks = response.content.filter((c) => c.type === 'text');
 
         // Accumulate text content
         for (const block of textBlocks) {
@@ -184,6 +190,10 @@ export class ClaudeService {
         for (const block of toolUseBlocks) {
           if (block.type === 'tool_use') {
             toolsUsed.push(block.name);
+            log('debug', `Tool call: ${block.name}`, {
+              toolName: block.name,
+              toolInput: JSON.stringify(block.input).substring(0, 500),
+            });
             const toolDef = toolRegistry.getDefinitions().find((d) => d.name === block.name);
 
             if (toolDef?.type === 'anthropic_server') {
@@ -228,11 +238,14 @@ export class ClaudeService {
       }
 
       log('info', 'Claude response generated', {
+        model: this.model,
         totalInputTokens,
         totalOutputTokens,
+        totalTokens: totalInputTokens + totalOutputTokens,
         apiCalls: apiCallCount,
         stopReason: lastStopReason,
-        toolsUsed,
+        toolsUsed: toolsUsed.join(', ') || 'none',
+        responsePreview: finalContent.substring(0, 150) || '(empty — tools only)',
       });
 
       return {
