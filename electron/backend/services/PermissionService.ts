@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { shell } from 'electron';
-import { log } from '../routes/dashboard';
+import { log } from '../logger';
 
 const execAsync = promisify(exec);
 
@@ -242,6 +242,14 @@ class PermissionServiceClass {
    * Open System Settings to the specified privacy pane
    */
   async openSystemSettings(settingsUrl: string): Promise<void> {
+    // Validate URL against allowlist to prevent opening arbitrary URLs/protocols (fixes A6)
+    const ALLOWED_PREFIXES = [
+      'x-apple.systempreferences:',
+    ];
+    if (!ALLOWED_PREFIXES.some(prefix => settingsUrl.startsWith(prefix))) {
+      log('warn', 'Blocked openSystemSettings for non-allowed URL', { url: settingsUrl });
+      return;
+    }
     try {
       await shell.openExternal(settingsUrl);
       log('info', 'Opened System Settings', { url: settingsUrl });

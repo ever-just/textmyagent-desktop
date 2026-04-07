@@ -29,7 +29,8 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 - **🔒 Privacy First** - All data stays on your Mac in a local SQLite database
 - **📊 Dashboard** - Beautiful Next.js dashboard for monitoring and configuration
 - **⚡ Real-time** - 2-second polling for near-instant responses
-- **🔐 Production Ready** - Hardened runtime, code signing, and notarization support
+- **🔐 Production Ready** - Hardened runtime, Developer ID code signing, and Apple notarization
+- **🔄 Auto-Update** - Built-in update checking with user-controlled downloads
 
 ## Requirements
 
@@ -53,10 +54,10 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 
 | Chip | Download |
 |------|----------|
-| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-1.6.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.6.0/TextMyAgent-1.6.0-arm64.dmg) |
-| **Intel** | [TextMyAgent-1.6.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.6.0/TextMyAgent-1.6.0.dmg) |
+| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-1.7.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.7.0/TextMyAgent-1.7.0-arm64.dmg) |
+| **Intel** | [TextMyAgent-1.7.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.7.0/TextMyAgent-1.7.0.dmg) |
 
-> **First Launch:** Right-click the app and select "Open" to bypass Gatekeeper on first launch.
+> Starting with v1.7.0, all builds are code-signed and notarized by Apple. You should be able to open the app directly without Gatekeeper warnings.
 
 ## Installation
 
@@ -176,15 +177,32 @@ npm run build                # Build for production
 
 ## Building for Distribution
 
+### Code Signing
+
+Builds are automatically signed with the Developer ID Application certificate. The signing identity is configured in `electron-builder.yml`.
+
 ### Notarization
 
-For distribution outside the App Store:
+Notarization uses a Keychain-stored credential profile. One-time setup:
 
 ```bash
-export APPLE_ID="your@email.com"
-export APPLE_ID_PASSWORD="app-specific-password"
-export APPLE_TEAM_ID="YOURTEAMID"
-npm run package:mac
+# Store credentials in Keychain (only needed once)
+xcrun notarytool store-credentials "textmyagent-notarize" \
+  --key ~/.appstoreconnect/private_keys/AuthKey_YOURKEYID.p8 \
+  --key-id YOURKEYID \
+  --issuer YOUR-ISSUER-UUID
+```
+
+Then build with notarization:
+
+```bash
+npm run dist:mac
+```
+
+To skip notarization during development:
+
+```bash
+SKIP_NOTARIZATION=true npm run dist:mac
 ```
 
 ## Troubleshooting

@@ -1,7 +1,8 @@
 import { EventEmitter } from 'events';
+import crypto from 'crypto';
 import { iMessageService, IMessage } from './iMessageService';
 import { claudeService, Message } from './ClaudeService';
-import { log } from '../routes/dashboard';
+import { log } from '../logger';
 import { getDatabase } from '../database';
 
 interface ConversationContext {
@@ -11,10 +12,17 @@ interface ConversationContext {
   lastActivity: number;
 }
 
+// Max age for conversation context entries before eviction (1 hour)
+const CONVERSATION_TTL_MS = 60 * 60 * 1000;
+const MAX_CONVERSATIONS = 500;
+
 export class AgentService extends EventEmitter {
   private isRunning = false;
   private conversations: Map<string, ConversationContext> = new Map();
-  private processingQueue: Set<string> = new Set();
+  private processingQueue: Set<string> = new Set(); // message guid dedup
+  private chatLocks: Set<string> = new Set(); // per-chat concurrency lock (fixes C1)
+  private chatQueues: Map<string, IMessage[]> = new Map(); // per-chat message queue
+  private static MAX_CHAT_QUEUE_SIZE = 5;
   private maxHistoryMessages = 20;
 
   constructor() {
@@ -83,11 +91,17 @@ export class AgentService extends EventEmitter {
     log('info', 'Stopping AI agent...');
     await iMessageService.stopPolling();
     this.isRunning = false;
+    this.chatQueues.clear();
+    this.chatLocks.clear();
+    this.processingQueue.clear();
     this.emit('stopped');
     log('info', 'AI agent stopped');
   }
 
   private async handleIncomingMessage(message: IMessage): Promise<void> {
+    // Don't process messages if agent has been stopped (fixes B8)
+    if (!this.isRunning) return;
+
     const chatGuid = message.chatGuid;
     const userHandle = message.handleId;
 
@@ -96,11 +110,27 @@ export class AgentService extends EventEmitter {
       return;
     }
 
-    // Prevent duplicate processing
+    // Prevent duplicate message processing
     if (this.processingQueue.has(message.guid)) {
       return;
     }
     this.processingQueue.add(message.guid);
+
+    // Per-chat lock: only one message processed per chat at a time (fixes C1)
+    if (this.chatLocks.has(chatGuid)) {
+      // Queue message instead of dropping it
+      const queue = this.chatQueues.get(chatGuid) || [];
+      if (queue.length >= AgentService.MAX_CHAT_QUEUE_SIZE) {
+        log('warn', 'Chat queue full, dropping oldest queued message', { chatGuid });
+        queue.shift();
+      }
+      queue.push(message);
+      this.chatQueues.set(chatGuid, queue);
+      log('info', 'Chat being processed, message queued', { chatGuid, queueLength: queue.length });
+      this.processingQueue.delete(message.guid);
+      return;
+    }
+    this.chatLocks.add(chatGuid);
 
     try {
       log('info', 'Processing message', {
@@ -194,6 +224,40 @@ export class AgentService extends EventEmitter {
       this.emit('error', error);
     } finally {
       this.processingQueue.delete(message.guid);
+      this.chatLocks.delete(chatGuid);
+
+      // Process next queued message for this chat, if any
+      const queue = this.chatQueues.get(chatGuid);
+      if (queue && queue.length > 0) {
+        const next = queue.shift()!;
+        if (queue.length === 0) this.chatQueues.delete(chatGuid);
+        this.handleIncomingMessage(next).catch(err =>
+          log('error', 'Error processing queued message', { error: err.message })
+        );
+      }
+    }
+
+    // Evict stale conversation contexts to prevent memory leak (fixes D3)
+    this.evictStaleConversations();
+  }
+
+  private evictStaleConversations(): void {
+    const now = Date.now();
+    if (this.conversations.size <= MAX_CONVERSATIONS) {
+      // Only do TTL check
+      for (const [key, ctx] of this.conversations) {
+        if (now - ctx.lastActivity > CONVERSATION_TTL_MS) {
+          this.conversations.delete(key);
+        }
+      }
+    } else {
+      // Over limit — evict oldest entries
+      const entries = [...this.conversations.entries()]
+        .sort((a, b) => a[1].lastActivity - b[1].lastActivity);
+      const toEvict = entries.slice(0, entries.length - MAX_CONVERSATIONS);
+      for (const [key] of toEvict) {
+        this.conversations.delete(key);
+      }
     }
   }
 
@@ -205,7 +269,6 @@ export class AgentService extends EventEmitter {
   ): void {
     try {
       const db = getDatabase();
-      const crypto = require('crypto');
 
       // Get or create user (id is TEXT, so we need to generate a UUID)
       let user = db
@@ -262,6 +325,10 @@ export class AgentService extends EventEmitter {
       db.prepare(
         'INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)'
       ).run(assistantMsgId, conversation.id, 'assistant', assistantResponse);
+
+      // Update conversation last_message_at (fixes B12)
+      db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), conversation.id);
       
       log('info', 'Messages saved to database', { conversationId: conversation.id });
     } catch (error: any) {

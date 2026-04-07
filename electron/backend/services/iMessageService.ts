@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { log } from '../routes/dashboard';
+import { log } from '../logger';
 import { getSetting, setSetting } from '../database';
 
 const execAsync = promisify(exec);
@@ -19,10 +19,6 @@ const APPLE_EPOCH = new Date('2001-01-01T00:00:00Z').getTime();
 function appleTimeToDate(appleTime: number): Date {
   // Apple stores time in nanoseconds since 2001-01-01
   return new Date(APPLE_EPOCH + appleTime / 1000000);
-}
-
-function dateToAppleTime(date: Date): number {
-  return (date.getTime() - APPLE_EPOCH) * 1000000;
 }
 
 export interface IMessage {
@@ -48,6 +44,7 @@ export class IMessageServiceClass extends EventEmitter {
   private pollInterval: NodeJS.Timeout | null = null;
   private lastMessageRowId: number = 0;
   private isRunning = false;
+  private isPolling = false; // Guard against concurrent poll execution (fixes C2)
   private dbCheckInterval: NodeJS.Timeout | null = null;
   private processedMessageGuids: Set<string> = new Set(); // Track processed messages to avoid duplicates
 
@@ -136,6 +133,9 @@ export class IMessageServiceClass extends EventEmitter {
 
   private async pollNewMessages(): Promise<void> {
     if (!this.db || !this.isRunning) return;
+    // Prevent concurrent poll execution (fixes C2)
+    if (this.isPolling) return;
+    this.isPolling = true;
 
     try {
       // Query for new messages since last poll
@@ -162,11 +162,9 @@ export class IMessageServiceClass extends EventEmitter {
       `).all(this.lastMessageRowId) as any[];
 
       for (const row of messages) {
-        // Update last seen ROWID and persist to database
+        // Update last seen ROWID (persisted after the loop, not per-message — fixes D1)
         if (row.ROWID > this.lastMessageRowId) {
           this.lastMessageRowId = row.ROWID;
-          // Persist to database so we don't reprocess on restart
-          setSetting('imessage_last_rowid', String(this.lastMessageRowId));
         }
 
         // Extract text from either text field or attributedBody (newer macOS)
@@ -207,9 +205,15 @@ export class IMessageServiceClass extends EventEmitter {
           this.emit('message', message);
         }
       }
+      // Persist ROWID once after processing the batch (fixes D1: was per-message)
+      if (messages.length > 0) {
+        setSetting('imessage_last_rowid', String(this.lastMessageRowId));
+      }
     } catch (error: any) {
       log('error', 'Failed to poll messages', { error: error.message });
       this.emit('error', error);
+    } finally {
+      this.isPolling = false;
     }
   }
 
@@ -239,13 +243,42 @@ export class IMessageServiceClass extends EventEmitter {
         return null;
       }
 
-      // After NSString, look for the pattern: 0x01 ... 0x2B ('+') followed by length byte and text
+      // After NSString, look for the pattern: 0x01 ... 0x2B ('+') followed by length and text
       // The 0x2B ('+' character) marks the start of the string data
       for (let i = nsStringIndex + nsStringMarker.length; i < data.length - 2; i++) {
         if (data[i] === 0x2B) { // '+' character marks string start
-          const lengthByte = data[i + 1];
-          if (lengthByte > 0 && lengthByte < 255 && i + 2 + lengthByte <= data.length) {
-            const textBytes = data.subarray(i + 2, i + 2 + lengthByte);
+          // Read variable-length integer (fixes B2: was single byte, max 254)
+          let textLength = 0;
+          let offset = i + 1;
+          const firstByte = data[offset];
+          if (firstByte < 0x80) {
+            // Single byte length (0-127)
+            textLength = firstByte;
+            offset += 1;
+          } else if (firstByte === 0x80) {
+            // 0x80 in BER means indefinite length — not a valid text length.
+            // Skip this marker and continue scanning for the next 0x2B.
+            continue;
+          } else if (firstByte === 0x81) {
+            // Two byte length: 0x81 followed by actual length byte (128-255)
+            if (offset + 1 < data.length) {
+              textLength = data[offset + 1];
+              offset += 2;
+            }
+          } else if (firstByte === 0x82) {
+            // Three byte length: 0x82 followed by 2-byte big-endian length (256-65535)
+            if (offset + 2 < data.length) {
+              textLength = (data[offset + 1] << 8) | data[offset + 2];
+              offset += 3;
+            }
+          } else {
+            // Fallback: treat as single byte
+            textLength = firstByte;
+            offset += 1;
+          }
+
+          if (textLength > 0 && textLength <= 100000 && offset + textLength <= data.length) {
+            const textBytes = data.subarray(offset, offset + textLength);
             const text = textBytes.toString('utf8');
             
             // Validate it's actual text (not metadata) and clean up any leading control chars
@@ -267,6 +300,16 @@ export class IMessageServiceClass extends EventEmitter {
     }
   }
 
+  // Escape a string for embedding inside an AppleScript double-quoted literal
+  private escapeForAppleScript(str: string): string {
+    return str
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\t/g, '" & tab & "')
+      .replace(/\r/g, '" & return & "')
+      .replace(/\n/g, '" & linefeed & "');
+  }
+
   async sendMessage(chatGuid: string, text: string): Promise<boolean> {
     if (!chatGuid || !text) {
       log('error', 'Cannot send message: missing chatGuid or text');
@@ -274,16 +317,13 @@ export class IMessageServiceClass extends EventEmitter {
     }
 
     try {
-      // Escape special characters for AppleScript
-      const escapedText = text
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n');
+      const escapedText = this.escapeForAppleScript(text);
+      const escapedChatGuid = this.escapeForAppleScript(chatGuid);
 
       // Build AppleScript to send message
       const script = `
         tell application "Messages"
-          set targetChat to a reference to chat id "${chatGuid}"
+          set targetChat to a reference to chat id "${escapedChatGuid}"
           send "${escapedText}" to targetChat
         end tell
       `;
@@ -311,7 +351,10 @@ export class IMessageServiceClass extends EventEmitter {
   private async sendMessageFallback(chatGuid: string, text: string): Promise<boolean> {
     try {
       const parts = chatGuid.split(';-;');
-      const service = parts[0] || 'iMessage';
+      const rawService = parts[0] || 'iMessage';
+      // Whitelist valid service types to prevent AppleScript injection
+      const allowedServices = ['iMessage', 'SMS'];
+      const service = allowedServices.includes(rawService) ? rawService : 'iMessage';
       const address = parts[1];
 
       if (!address) {
@@ -319,15 +362,13 @@ export class IMessageServiceClass extends EventEmitter {
         return false;
       }
 
-      const escapedText = text
-        .replace(/\\/g, '\\\\')
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n');
+      const escapedText = this.escapeForAppleScript(text);
+      const escapedAddress = this.escapeForAppleScript(address);
 
       const script = `
         tell application "Messages"
           set targetService to 1st account whose service type = ${service}
-          set targetBuddy to participant "${address}" of targetService
+          set targetBuddy to participant "${escapedAddress}" of targetService
           send "${escapedText}" to targetBuddy
         end tell
       `;
@@ -350,10 +391,12 @@ export class IMessageServiceClass extends EventEmitter {
     if (!this.db) return [];
 
     try {
+      // Include attributedBody to capture messages where text is NULL (fixes B4)
       const messages = this.db.prepare(`
         SELECT 
           m.guid,
           m.text,
+          m.attributedBody,
           m.is_from_me,
           m.date,
           m.service,
@@ -363,20 +406,26 @@ export class IMessageServiceClass extends EventEmitter {
         LEFT JOIN handle h ON m.handle_id = h.ROWID
         LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
         LEFT JOIN chat c ON cmj.chat_id = c.ROWID
-        WHERE c.guid = ? AND m.text IS NOT NULL
+        WHERE c.guid = ? AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
         ORDER BY m.date DESC
         LIMIT ?
       `).all(chatGuid, limit) as any[];
 
-      return messages.reverse().map(row => ({
-        guid: row.guid,
-        text: row.text || '',
-        isFromMe: row.is_from_me === 1,
-        dateCreated: appleTimeToDate(row.date),
-        handleId: row.handle_id || '',
-        chatGuid: row.chat_guid,
-        service: row.service || 'iMessage',
-      }));
+      return messages.reverse().map(row => {
+        let text = row.text || '';
+        if (!text && row.attributedBody) {
+          text = this.extractTextFromAttributedBody(row.attributedBody) || '';
+        }
+        return {
+          guid: row.guid,
+          text,
+          isFromMe: row.is_from_me === 1,
+          dateCreated: appleTimeToDate(row.date),
+          handleId: row.handle_id || '',
+          chatGuid: row.chat_guid,
+          service: row.service || 'iMessage',
+        };
+      });
     } catch (error: any) {
       log('error', 'Failed to get conversation history', { error: error.message });
       return [];
@@ -423,16 +472,15 @@ export class IMessageServiceClass extends EventEmitter {
   }
 
   async checkPermissions(): Promise<{ hasAccess: boolean; error?: string }> {
+    let testDb: DatabaseType | null = null;
     try {
       if (!fs.existsSync(IMESSAGE_DB_PATH)) {
         return { hasAccess: false, error: 'iMessage database not found' };
       }
 
-      // Try to open the database
-      const testDb = new Database(IMESSAGE_DB_PATH, { readonly: true });
+      // Try to open the database (fixes B9: wrap in try/finally to prevent leak)
+      testDb = new Database(IMESSAGE_DB_PATH, { readonly: true });
       testDb.prepare('SELECT 1 FROM message LIMIT 1').get();
-      testDb.close();
-
       return { hasAccess: true };
     } catch (error: any) {
       if (error.message.includes('SQLITE_CANTOPEN')) {
@@ -442,6 +490,10 @@ export class IMessageServiceClass extends EventEmitter {
         };
       }
       return { hasAccess: false, error: error.message };
+    } finally {
+      if (testDb) {
+        try { testDb.close(); } catch {}
+      }
     }
   }
 }

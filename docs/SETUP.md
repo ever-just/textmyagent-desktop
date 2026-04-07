@@ -203,11 +203,14 @@ security delete-generic-password -s "textmyagent-desktop" -a "anthropic-api-key"
 
 ### Automatic Updates
 
-TextMyAgent checks for updates automatically and will prompt you when a new version is available.
+TextMyAgent checks for updates automatically on startup and will prompt you when a new version is available. You can also check manually from the dashboard.
+
+- Updates are **not** downloaded automatically — you choose when to download and install.
+- Updates install on next app quit, or you can install immediately from the prompt.
 
 ### Manual Update
 
-1. Download the latest release
+1. Download the latest release from [GitHub Releases](https://github.com/ever-just/textmyagent-desktop/releases)
 2. Quit TextMyAgent
 3. Replace the app in Applications
 4. Launch the new version

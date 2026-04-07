@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { SecureStorage } from '../../utils/secure-storage';
-import { log } from '../routes/dashboard';
+import { log } from '../logger';
 import { getDatabase, recordApiUsage } from '../database';
 
 export interface Message {
@@ -17,7 +17,7 @@ export interface ClaudeResponse {
 
 export class ClaudeService {
   private client: Anthropic | null = null;
-  private model = 'claude-sonnet-4-20250514';
+  private model = 'claude-3-5-haiku-latest';
   private maxTokens = 1024;
   private temperature = 0.7;
   private initialized = false;
@@ -27,18 +27,22 @@ export class ClaudeService {
   }
 
   private initClient(): void {
-    if (this.initialized) return;
-    this.initialized = true;
+    if (this.initialized && this.client) return;
     
     try {
       const apiKey = SecureStorage.getAnthropicApiKey();
       if (apiKey) {
-        this.client = new Anthropic({ apiKey });
+        this.client = new Anthropic({ apiKey, maxRetries: 3 });
+        this.initialized = true;
         log('info', 'Claude client initialized');
+      } else {
+        // Don't set initialized=true if no key — allow retry later (fixes B10)
+        this.client = null;
       }
     } catch (error: any) {
       // Electron app may not be ready yet
       this.initialized = false;
+      this.client = null;
       console.log('[ClaudeService] Deferred initialization:', error.message);
     }
   }
@@ -98,8 +102,8 @@ Guidelines:
       const textContent = response.content.find((c) => c.type === 'text');
       const content = textContent?.type === 'text' ? textContent.text : '';
 
-      // Record API usage
-      recordApiUsage(response.usage.input_tokens, response.usage.output_tokens);
+      // Record API usage with correct model (fixes B7)
+      recordApiUsage(response.usage.input_tokens, response.usage.output_tokens, this.model);
 
       log('info', 'Claude response generated', {
         inputTokens: response.usage.input_tokens,
@@ -119,8 +123,7 @@ Guidelines:
       // Handle specific error types
       if (error.status === 401) {
         log('error', 'Invalid Anthropic API key');
-      } else if (error.status === 429) {
-        log('warn', 'Rate limited by Anthropic API');
+        return null;
       }
 
       return null;

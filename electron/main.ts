@@ -88,10 +88,32 @@ function createMainWindow(): void {
     }
   });
 
-  // Handle external links
+  // Handle external links — validate URL scheme before opening (fixes A5)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        shell.openExternal(url);
+      } else {
+        console.warn('[Main] Blocked openExternal for non-http URL:', url);
+      }
+    } catch {
+      console.warn('[Main] Blocked openExternal for invalid URL:', url);
+    }
     return { action: 'deny' };
+  });
+
+  // Prevent navigation away from the app (security hardening)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = [
+      `http://127.0.0.1:${backendPort}`,
+      `http://localhost:${backendPort}`,
+      'http://localhost:3000',
+    ];
+    if (!allowed.some(prefix => url.startsWith(prefix))) {
+      event.preventDefault();
+      console.warn('[Main] Blocked navigation to:', url);
+    }
   });
 
   // Pass backend port to renderer
@@ -139,10 +161,14 @@ app.whenReady().then(async () => {
       setupAutoUpdater(mainWindow);
     }
 
-    // macOS: Handle reopen
+    // macOS: Handle reopen (fixes G2 — validate backend is still running)
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
+        if (backendPort) {
+          createMainWindow();
+        } else {
+          console.warn('[Main] Cannot create window — backend port not available');
+        }
       } else {
         mainWindow?.show();
       }
@@ -166,6 +192,13 @@ app.on('will-quit', async (event) => {
   console.log('App quitting, cleaning up...');
 
   try {
+    // Stop agent before closing server/database to prevent polling errors
+    try {
+      const { agentService } = require('./backend/services/AgentService');
+      await agentService.stop();
+    } catch (_e) {
+      // Agent may not have been started
+    }
     await stopBackendServer();
     closeDatabase();
     destroyTray();
@@ -183,13 +216,26 @@ app.on('window-all-closed', () => {
   }
 });
 
-// Power events
+// Power events — pause/resume agent to avoid stale DB connections (fixes G1)
 powerMonitor.on('suspend', () => {
-  console.log('System suspending...');
+  console.log('[Main] System suspending, pausing agent...');
+  const { agentService } = require('./backend/services/AgentService');
+  if (agentService.getStatus().isRunning) {
+    agentService.stop().catch((err: Error) => console.error('[Main] Error stopping agent on suspend:', err));
+    (global as any).__agentWasRunning = true;
+  }
 });
 
 powerMonitor.on('resume', () => {
-  console.log('System resumed');
+  console.log('[Main] System resumed');
+  if ((global as any).__agentWasRunning) {
+    (global as any).__agentWasRunning = false;
+    const { agentService } = require('./backend/services/AgentService');
+    // Delay restart to allow system to fully wake
+    setTimeout(() => {
+      agentService.start().catch((err: Error) => console.error('[Main] Error restarting agent on resume:', err));
+    }, 3000);
+  }
 });
 
 // IPC Handlers

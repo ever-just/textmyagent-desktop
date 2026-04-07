@@ -37,6 +37,7 @@ textmyagent-desktop/
 │   ├── backend/                  # Backend server
 │   │   ├── server.ts             # Express server setup
 │   │   ├── database.ts           # SQLite database & migrations
+│   │   ├── logger.ts             # Log buffer, SSE broadcast, LogEntry type
 │   │   ├── routes/
 │   │   │   └── dashboard.ts      # All API endpoints
 │   │   └── services/
@@ -54,7 +55,8 @@ textmyagent-desktop/
 │   └── lib/                      # Utilities
 ├── resources/                    # Build resources
 │   ├── icons/                    # App icons (.icns, .png)
-│   └── entitlements.mac.plist    # macOS entitlements
+│   ├── entitlements.mac.plist    # macOS entitlements (main app)
+│   └── entitlements.inherit.plist # Entitlements for helper processes
 ├── electron-builder.yml          # Build configuration
 ├── notarize.js                   # Apple notarization script
 └── package.json
@@ -66,7 +68,8 @@ textmyagent-desktop/
 
 The core orchestration service that:
 - Listens for new messages from iMessageService
-- Maintains conversation context per chat
+- Maintains conversation context per chat (with 1-hour TTL eviction)
+- Queues messages when a chat is locked (up to 5 per chat, FIFO drain)
 - Sends messages to ClaudeService for AI responses
 - Sends responses back via iMessageService
 - Saves conversations to the database
@@ -202,9 +205,10 @@ All endpoints are prefixed with `/api/dashboard/`
 ## Security
 
 ### API Key Storage
-- Stored in macOS Keychain via `keytar`
-- Never written to disk in plaintext
-- Accessed via SecureStorage utility
+- Encrypted via Electron's `safeStorage` API (backed by macOS Keychain)
+- Validated on write: must match `sk-ant-` prefix, ≤256 chars
+- Masked in renderer process (IPC returns `••••••••` instead of raw key)
+- Accessed via `SecureStorage` utility with in-memory cache
 
 ### Entitlements
 - `com.apple.security.cs.allow-jit` - V8 JIT compilation
@@ -225,5 +229,5 @@ All endpoints are prefixed with `/api/dashboard/`
 1. **TypeScript Compilation**: `tsc -p electron/tsconfig.json`
 2. **Dashboard Build**: `next build` (static export)
 3. **Electron Package**: `electron-builder --mac`
-4. **Code Signing**: Automatic with Developer ID
-5. **Notarization**: Via `notarize.js` afterSign hook
+4. **Code Signing**: Automatic with Developer ID Application certificate (identity configured in `electron-builder.yml`)
+5. **Notarization**: Via `notarize.js` afterSign hook using Keychain-stored credentials (profile: `textmyagent-notarize`)

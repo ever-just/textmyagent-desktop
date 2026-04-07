@@ -1,9 +1,13 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { getDatabase, getSetting, setSetting } from '../database';
 import { SecureStorage } from '../../utils/secure-storage';
 import { agentService } from '../services/AgentService';
 import { iMessageService } from '../services/iMessageService';
 import { claudeService } from '../services/ClaudeService';
+import { log, logBuffer, logSubscribers } from '../logger';
+export type { LogEntry } from '../logger';
+export { log, logBuffer };
 
 // Lazy import electron to avoid initialization issues
 const getElectronApp = () => {
@@ -15,81 +19,6 @@ const getElectronApp = () => {
 };
 
 const router = Router();
-
-// In-memory log buffer
-interface LogEntry {
-  timestamp: string;
-  level: 'error' | 'warn' | 'info' | 'debug';
-  message: string;
-  metadata?: Record<string, any>;
-}
-
-class LogBuffer {
-  private logs: LogEntry[] = [];
-  private maxSize = 500;
-
-  add(entry: LogEntry) {
-    this.logs.push(entry);
-    if (this.logs.length > this.maxSize) {
-      this.logs.shift();
-    }
-  }
-
-  query(filters: { level?: string; search?: string; limit?: number }): LogEntry[] {
-    let result = [...this.logs];
-
-    if (filters.level && filters.level !== 'all') {
-      result = result.filter((log) => log.level === filters.level);
-    }
-
-    if (filters.search) {
-      const searchLower = filters.search.toLowerCase();
-      result = result.filter(
-        (log) =>
-          log.message.toLowerCase().includes(searchLower) ||
-          JSON.stringify(log.metadata || {}).toLowerCase().includes(searchLower)
-      );
-    }
-
-    result.reverse();
-
-    if (filters.limit) {
-      result = result.slice(0, filters.limit);
-    }
-
-    return result;
-  }
-}
-
-export const logBuffer = new LogBuffer();
-
-// Log helper
-export function log(
-  level: 'error' | 'warn' | 'info' | 'debug',
-  message: string,
-  metadata?: Record<string, any>
-) {
-  const entry: LogEntry = { timestamp: new Date().toISOString(), level, message, metadata };
-  logBuffer.add(entry);
-  console.log(`[${level.toUpperCase()}] ${message}`, metadata || '');
-  
-  // Broadcast to SSE subscribers (delayed import to avoid circular dependency)
-  setTimeout(() => {
-    try {
-      const subscribers = (global as any).__logSubscribers as Set<Response> | undefined;
-      if (subscribers && subscribers.size > 0) {
-        const msg = `data: ${JSON.stringify(entry)}\n\n`;
-        subscribers.forEach((client) => {
-          try {
-            client.write(msg);
-          } catch {
-            subscribers.delete(client);
-          }
-        });
-      }
-    } catch {}
-  }, 0);
-}
 
 // --- Status ---
 router.get('/status', async (_req: Request, res: Response) => {
@@ -184,6 +113,17 @@ router.put('/config', async (req: Request, res: Response) => {
       setSetting(key, JSON.stringify(value));
     }
 
+    // Propagate config changes to live services (fixes B5)
+    if (updates['anthropic.model']) {
+      claudeService.setModel(updates['anthropic.model']);
+    }
+    if (updates['anthropic.responseMaxTokens'] !== undefined) {
+      claudeService.setMaxTokens(Number(updates['anthropic.responseMaxTokens']));
+    }
+    if (updates['anthropic.temperature'] !== undefined) {
+      claudeService.setTemperature(Number(updates['anthropic.temperature']));
+    }
+
     log('info', 'Configuration updated', { keys: Object.keys(updates) });
     res.json({ success: true });
   } catch (error) {
@@ -209,14 +149,11 @@ router.get('/logs', async (req: Request, res: Response) => {
 });
 
 // --- Log Stream (SSE) ---
-const logSubscribers: Set<Response> = new Set();
-(global as any).__logSubscribers = logSubscribers;
 
 router.get('/logs/stream', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
   
   // Send initial connection message
   res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
@@ -229,18 +166,6 @@ router.get('/logs/stream', (req: Request, res: Response) => {
     log('info', 'Log stream client disconnected', { clients: logSubscribers.size });
   });
 });
-
-// Broadcast log to all subscribers
-export function broadcastLog(entry: LogEntry) {
-  const message = `data: ${JSON.stringify(entry)}\n\n`;
-  logSubscribers.forEach((client) => {
-    try {
-      client.write(message);
-    } catch {
-      logSubscribers.delete(client);
-    }
-  });
-}
 
 // --- Users ---
 router.get('/users', async (_req: Request, res: Response) => {
@@ -429,17 +354,18 @@ router.get('/permissions', async (_req: Request, res: Response) => {
           status: 'running',
         },
       ],
-      apiKeys: [
-        {
+      apiKeys: (() => {
+        const hasKey = SecureStorage.hasAnthropicKey();
+        return [{
           id: 'anthropic',
           name: 'Anthropic API Key',
           description: 'Required for Claude AI responses',
           required: true,
-          configured: !!SecureStorage.getAnthropicApiKey(),
-          masked: SecureStorage.getAnthropicApiKey() ? 'sk-ant-••••••••' : undefined,
+          configured: hasKey,
+          masked: hasKey ? 'sk-ant-••••••••' : undefined,
           docsUrl: 'https://console.anthropic.com/settings/keys',
-        },
-      ],
+        }];
+      })(),
     });
   } catch (error) {
     log('error', 'Get permissions failed', { error: String(error) });
@@ -453,9 +379,13 @@ router.post('/settings/api-key', async (req: Request, res: Response) => {
     const { key, value } = req.body;
     
     if (key === 'ANTHROPIC_API_KEY') {
-      SecureStorage.setAnthropicApiKey(value);
-      log('info', 'Anthropic API key updated');
-      res.json({ success: true });
+      try {
+        SecureStorage.setAnthropicApiKey(value);
+        log('info', 'Anthropic API key updated');
+        res.json({ success: true });
+      } catch (e: any) {
+        return res.status(400).json({ error: e.message });
+      }
     } else {
       res.status(400).json({ error: 'Unknown key' });
     }
@@ -466,16 +396,27 @@ router.post('/settings/api-key', async (req: Request, res: Response) => {
 });
 
 // --- Settings Open (macOS) ---
+// Allowlist of safe URL schemes for opening system settings (fixes A1: command injection)
+const ALLOWED_SETTINGS_PREFIXES = [
+  'x-apple.systempreferences:',
+  'https://console.anthropic.com/',
+];
+
 router.post('/settings/open', async (req: Request, res: Response) => {
   try {
     const { settingsUrl } = req.body;
-    if (settingsUrl) {
-      const { exec } = require('child_process');
-      exec(`open "${settingsUrl}"`);
-      res.json({ success: true });
-    } else {
-      res.status(400).json({ error: 'settingsUrl required' });
+    if (!settingsUrl || typeof settingsUrl !== 'string') {
+      return res.status(400).json({ error: 'settingsUrl required' });
     }
+    // Validate against allowlist to prevent command injection
+    const isAllowed = ALLOWED_SETTINGS_PREFIXES.some(prefix => settingsUrl.startsWith(prefix));
+    if (!isAllowed) {
+      log('warn', 'Blocked settings URL not in allowlist', { settingsUrl });
+      return res.status(400).json({ error: 'URL not allowed' });
+    }
+    const { shell } = require('electron');
+    await shell.openExternal(settingsUrl);
+    res.json({ success: true });
   } catch (error) {
     log('error', 'Open settings failed', { error: String(error) });
     res.status(500).json({ error: 'Failed to open settings' });
@@ -494,7 +435,7 @@ router.post('/contacts/import', async (_req: Request, res: Response) => {
       if (authStatus === 'Authorized') {
         contacts = macContacts.getAllContacts() || [];
         res.json(contacts.map((c: any) => ({
-          id: c.identifier || String(Math.random()),
+          id: c.identifier || crypto.randomUUID(),
           firstName: c.givenName || '',
           lastName: c.familyName || '',
           phoneNumbers: c.phoneNumbers || [],
@@ -647,8 +588,12 @@ router.post('/setup/credentials', async (req: Request, res: Response) => {
     const { anthropicApiKey } = req.body;
 
     if (anthropicApiKey) {
-      SecureStorage.setAnthropicApiKey(anthropicApiKey);
-      log('info', 'Anthropic API key saved');
+      try {
+        SecureStorage.setAnthropicApiKey(anthropicApiKey);
+        log('info', 'Anthropic API key saved');
+      } catch (e: any) {
+        return res.status(400).json({ error: e.message });
+      }
     }
 
     // Check full configuration status (API key + iMessage access)
@@ -694,13 +639,27 @@ router.post('/setup/test-anthropic', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'API key required' });
     }
 
-    // Simple validation - check if key format is correct
+    // Validate format
     if (!testKey.startsWith('sk-ant-')) {
       return res.json({ success: false, error: 'Invalid API key format' });
     }
 
-    // Could do a real API test here, but for now just validate format
-    res.json({ success: true });
+    // Actually test the API key with a minimal request (fixes B11)
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const testClient = new Anthropic.default({ apiKey: testKey });
+      await testClient.messages.create({
+        model: 'claude-3-5-haiku-latest',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'test' }],
+      });
+      res.json({ success: true });
+    } catch (apiError: any) {
+      const msg = apiError?.status === 401 ? 'Invalid API key' 
+        : apiError?.status === 429 ? 'Rate limited — key is valid but try again later'
+        : `API error: ${apiError?.message || 'Unknown error'}`;
+      res.json({ success: apiError?.status === 429, error: msg });
+    }
   } catch (error: any) {
     log('warn', 'Anthropic test failed', { error: error.message });
     res.json({ success: false, error: error.message });

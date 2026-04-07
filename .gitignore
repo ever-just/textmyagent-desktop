@@ -44,3 +44,4 @@ coverage/
 
 # Electron
 *.asar
+.windsurf/

@@ -2,8 +2,8 @@ import { autoUpdater } from 'electron-updater';
 import { BrowserWindow, ipcMain } from 'electron';
 
 export function setupAutoUpdater(mainWindow: BrowserWindow): void {
-  // Configure auto-updater
-  autoUpdater.autoDownload = true;
+  // Configure auto-updater (fixes F1: don't auto-download without user consent)
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   // Event handlers
@@ -44,6 +44,14 @@ export function setupAutoUpdater(mainWindow: BrowserWindow): void {
       await autoUpdater.checkForUpdates();
     } catch (error) {
       console.error('[AutoUpdater] Check failed:', error);
+    }
+  });
+
+  ipcMain.handle('download-update', async () => {
+    try {
+      await autoUpdater.downloadUpdate();
+    } catch (error) {
+      console.error('[AutoUpdater] Download failed:', error);
     }
   });
 

@@ -24,22 +24,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
   requestPermission: (permission: string) =>
     ipcRenderer.invoke('permissions:request', permission),
 
-  // Event listeners
+  // Event listeners (return cleanup functions to prevent listener stacking — fixes E6)
   onBackendPort: (callback: (port: number) => void) => {
-    ipcRenderer.on('backend-port', (_event, port) => callback(port));
+    const handler = (_event: any, port: number) => callback(port);
+    ipcRenderer.on('backend-port', handler);
+    return () => ipcRenderer.removeListener('backend-port', handler);
   },
   onNavigate: (callback: (path: string) => void) => {
-    ipcRenderer.on('navigate', (_event, path) => callback(path));
+    const handler = (_event: any, path: string) => callback(path);
+    ipcRenderer.on('navigate', handler);
+    return () => ipcRenderer.removeListener('navigate', handler);
   },
   onUpdateAvailable: (callback: (info: any) => void) => {
-    ipcRenderer.on('update-available', (_event, info) => callback(info));
+    const handler = (_event: any, info: any) => callback(info);
+    ipcRenderer.on('update-available', handler);
+    return () => ipcRenderer.removeListener('update-available', handler);
   },
   onUpdateDownloaded: (callback: () => void) => {
-    ipcRenderer.on('update-downloaded', () => callback());
+    const handler = () => callback();
+    ipcRenderer.on('update-downloaded', handler);
+    return () => ipcRenderer.removeListener('update-downloaded', handler);
   },
 
   // Auto-update
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
 });
 
@@ -64,11 +73,12 @@ declare global {
       isConfigured: () => Promise<boolean>;
       checkPermission: (permission: string) => Promise<boolean>;
       requestPermission: (permission: string) => Promise<boolean>;
-      onBackendPort: (callback: (port: number) => void) => void;
-      onNavigate: (callback: (path: string) => void) => void;
-      onUpdateAvailable: (callback: (info: any) => void) => void;
-      onUpdateDownloaded: (callback: () => void) => void;
+      onBackendPort: (callback: (port: number) => void) => () => void;
+      onNavigate: (callback: (path: string) => void) => () => void;
+      onUpdateAvailable: (callback: (info: any) => void) => () => void;
+      onUpdateDownloaded: (callback: () => void) => () => void;
       checkForUpdates: () => Promise<void>;
+      downloadUpdate: () => Promise<void>;
       installUpdate: () => Promise<void>;
     };
   }

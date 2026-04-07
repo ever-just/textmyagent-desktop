@@ -8,7 +8,6 @@ directories:
 
 files:
   - dist/electron/**/*
-  - dashboard/.next/static/**/*
   - dashboard/out/**/*
   - "!**/*.ts"
   - "!**/*.map"
@@ -27,8 +26,10 @@ mac:
   darkModeSupport: true
   hardenedRuntime: true
   gatekeeperAssess: false
+  identity: "EVERJUST COMPANY (8769U6225R)"
+  type: distribution
   entitlements: resources/entitlements.mac.plist
-  entitlementsInherit: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.inherit.plist
   notarize: false
   # Notarization is handled by afterSign hook (notarize.js)
   # Set APPLE_ID, APPLE_ID_PASSWORD, and APPLE_TEAM_ID env vars to enable
@@ -43,10 +44,6 @@ mac:
     NSDesktopFolderUsageDescription: "TextMyAgent may need access to Desktop for file attachments."
     NSDocumentsFolderUsageDescription: "TextMyAgent may need access to Documents for file attachments."
     NSDownloadsFolderUsageDescription: "TextMyAgent may need access to Downloads for file attachments."
-    CFBundleURLTypes:
-      - CFBundleURLName: TextMyAgent
-        CFBundleURLSchemes:
-          - textmyagent
   target:
     - target: dmg
       arch:

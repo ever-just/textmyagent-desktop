@@ -57,6 +57,7 @@ textmyagent-desktop/
 │   ├── backend/
 │   │   ├── server.ts        # Express server
 │   │   ├── database.ts      # SQLite + migrations
+│   │   ├── logger.ts        # Log buffer + SSE broadcast
 │   │   ├── routes/
 │   │   │   └── dashboard.ts # API endpoints
 │   │   └── services/
@@ -68,7 +69,7 @@ textmyagent-desktop/
 │       ├── secure-storage.ts
 │       ├── auto-updater.ts
 │       └── tray.ts
-├── dashboard/               # Next.js frontend
+├── dashboard/                # Next.js frontend
 │   ├── app/                # Pages
 │   ├── components/         # React components
 │   └── lib/               # Utilities
@@ -133,7 +134,7 @@ router.get('/my-endpoint', async (req: Request, res: Response) => {
 
 ```typescript
 import { EventEmitter } from 'events';
-import { log } from '../routes/dashboard';
+import { log } from '../logger';
 
 class MyServiceClass extends EventEmitter {
   private static instance: MyServiceClass;
@@ -238,32 +239,38 @@ SELECT * FROM messages LIMIT 10;
 
 ### Prerequisites
 
-- Apple Developer account
-- Developer ID Application certificate
-- App-specific password for notarization
+- Apple Developer account with active Developer Program membership
+- Developer ID Application certificate installed in Keychain
+- App Store Connect API key (`.p8` file)
+
+### One-Time Setup: Store Notarization Credentials
+
+```bash
+xcrun notarytool store-credentials "textmyagent-notarize" \
+  --key ~/.appstoreconnect/private_keys/AuthKey_YOURKEYID.p8 \
+  --key-id YOURKEYID \
+  --issuer YOUR-ISSUER-UUID
+```
 
 ### Build Steps
 
 ```bash
-# Set notarization credentials
-export APPLE_ID="your@email.com"
-export APPLE_ID_PASSWORD="app-specific-password"
-export APPLE_TEAM_ID="YOURTEAMID"
+# Build everything and package with signing + notarization
+npm run dist:mac
 
-# Build
-npm run build:electron
-cd dashboard && npm run build && cd ..
-
-# Package with notarization
-npm run package:mac
+# Or skip notarization for faster dev builds
+SKIP_NOTARIZATION=true npm run dist:mac
 ```
+
+The `notarize.js` afterSign hook automatically submits to Apple's notary service using the stored keychain profile.
 
 ### Creating a Release
 
 1. Update version in `package.json`
-2. Build and package
-3. Create GitHub release
-4. Upload DMG/ZIP artifacts
+2. Update `CHANGELOG.md`
+3. Commit and tag: `git tag v1.x.0`
+4. Build: `npm run dist:mac`
+5. Create GitHub release and upload DMG/ZIP artifacts from `build/`
 
 ## Troubleshooting Development
 
