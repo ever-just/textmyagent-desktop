@@ -484,7 +484,7 @@ export function seedDefaultSettings(): void {
     // Anthropic
     'anthropic.model': JSON.stringify('claude-haiku-4-5-20251001'),
     'anthropic.temperature': JSON.stringify(0.7),
-    'anthropic.responseMaxTokens': JSON.stringify(350),
+    'anthropic.responseMaxTokens': JSON.stringify(1024),
     'anthropic.contextWindowTokens': JSON.stringify(7000),
     'anthropic.enableWebSearch': JSON.stringify(true),
     // iMessage
@@ -541,6 +541,19 @@ export function seedDefaultSettings(): void {
   });
 
   seedTx();
+
+  // Migration: bump responseMaxTokens from old default (350) to 1024
+  // so tool calls (react_to_message, wait) have enough token budget.
+  // Only updates if still at the old default — preserves user-customized values.
+  try {
+    const current = db.prepare("SELECT value FROM settings WHERE key = 'anthropic.responseMaxTokens'").get() as { value: string } | undefined;
+    if (current && JSON.parse(current.value) <= 350) {
+      db.prepare("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = 'anthropic.responseMaxTokens'")
+        .run(JSON.stringify(1024));
+      console.log('[Database] Migrated responseMaxTokens 350 → 1024');
+    }
+  } catch { /* ignore migration errors */ }
+
   console.log('[Database] Default settings seeded');
 }
 

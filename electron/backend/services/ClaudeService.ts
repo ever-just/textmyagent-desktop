@@ -22,7 +22,7 @@ export interface ClaudeResponse {
 export class ClaudeService {
   private client: Anthropic | null = null;
   private model = 'claude-haiku-4-5-20251001';
-  private maxTokens = 256;
+  private maxTokens = 1024;
   private temperature = 0.7;
   private initialized = false;
 
@@ -54,7 +54,25 @@ export class ClaudeService {
   refreshClient(): void {
     this.initialized = false;
     this.client = null;
+    this.syncSettings();
     this.initClient();
+  }
+
+  /**
+   * Sync ClaudeService runtime state with persisted database settings.
+   * Called on refreshClient (agent start/restart) so the hardcoded
+   * defaults are overridden by whatever the user configured in the dashboard.
+   */
+  syncSettings(): void {
+    try {
+      const { getSettingValue } = require('../database');
+      this.model = getSettingValue('anthropic.model', this.model);
+      this.maxTokens = Number(getSettingValue('anthropic.responseMaxTokens', this.maxTokens));
+      this.temperature = Number(getSettingValue('anthropic.temperature', this.temperature));
+      log('info', 'ClaudeService settings synced', { model: this.model, maxTokens: this.maxTokens, temperature: this.temperature });
+    } catch {
+      // Database may not be ready yet — keep current values
+    }
   }
 
   isConfigured(): boolean {

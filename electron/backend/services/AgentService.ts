@@ -63,6 +63,9 @@ export class AgentService extends EventEmitter {
 
     log('info', 'Starting AI agent...');
 
+    // Always sync settings from database (model, maxTokens, temperature)
+    claudeService.syncSettings();
+
     // Check if Claude is configured
     if (!claudeService.isConfigured()) {
       claudeService.refreshClient();
