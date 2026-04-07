@@ -47,13 +47,24 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 | **Automation** | Send messages via Messages.app |
 | **Contacts** (optional) | Display contact names instead of phone numbers |
 
+## Download
+
+### macOS
+
+| Chip | Download |
+|------|----------|
+| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-1.6.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.6.0/TextMyAgent-1.6.0-arm64.dmg) |
+| **Intel** | [TextMyAgent-1.6.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.6.0/TextMyAgent-1.6.0.dmg) |
+
+> **First Launch:** Right-click the app and select "Open" to bypass Gatekeeper on first launch.
+
 ## Installation
 
 ### From Release
 
-1. Download the latest `.dmg` from the [Releases](https://github.com/ever-just/textmyagent-desktop/releases) page
+1. Download the DMG for your Mac from the links above
 2. Open the DMG and drag TextMyAgent to Applications
-3. Launch TextMyAgent
+3. **Right-click** TextMyAgent and select **Open** (required for first launch)
 4. Follow the setup wizard
 
 ### From Source

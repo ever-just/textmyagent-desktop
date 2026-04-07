@@ -29,7 +29,8 @@ mac:
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
-  # Notarization is handled by afterSign hook above
+  notarize: false
+  # Notarization is handled by afterSign hook (notarize.js)
   # Set APPLE_ID, APPLE_ID_PASSWORD, and APPLE_TEAM_ID env vars to enable
   extendInfo:
     # Contacts permission - for identifying message senders

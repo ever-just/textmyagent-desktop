@@ -15,9 +15,9 @@ exports.default = async function notarizing(context) {
     return;
   }
 
-  // Check for required environment variables
+  // Check for required environment variables (support both naming conventions)
   const appleId = process.env.APPLE_ID;
-  const appleIdPassword = process.env.APPLE_ID_PASSWORD; // App-specific password
+  const appleIdPassword = process.env.APPLE_ID_PASSWORD || process.env.APPLE_APP_SPECIFIC_PASSWORD;
   const teamId = process.env.APPLE_TEAM_ID;
 
   if (!appleId || !appleIdPassword || !teamId) {
