@@ -24,7 +24,7 @@ export async function waitTool(
 
 export const waitToolDefinition = {
   name: 'wait',
-  description: 'Choose not to send a text response. Use when no reply is needed: simple acknowledgments (ok/got it/k), gratitude (thanks/ty), goodbyes (bye/ttyl), or when you already reacted with react_to_message and no text is needed.',
+  description: 'Choose not to send any text response to the user. Call this tool when replying with text would be unnecessary or awkward — for example, after simple acknowledgments (ok, got it, k), gratitude (thanks, ty), goodbyes (bye, ttyl, gn), or when the user sent a tapback reaction. This tool is commonly paired with react_to_message: first react with a tapback, then call wait to skip the text reply. When in doubt about whether to respond, prefer sending a short text reply over calling wait — silence should be intentional, not a default. The reason parameter should briefly explain why no text response is needed.',
   type: 'custom' as const,
   enabled: true,
   inputSchema: {

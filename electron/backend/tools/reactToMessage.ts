@@ -43,7 +43,7 @@ export async function reactToMessage(
 
 export const reactToMessageDefinition = {
   name: 'react_to_message',
-  description: "Send a tapback reaction to the user's last message. Use for acknowledgments (like), gratitude (love), humor (laugh), etc. Prefer this over typing emoji as text.",
+  description: "Send a tapback reaction (emoji) to the user's last message in the conversation. Use this tool instead of sending an emoji as a text message — tapback reactions are more natural in iMessage. Call this for acknowledgments (like), gratitude or good news (love), humor (laugh), important messages (emphasize), or confusing messages (question). You can pair this with the 'wait' tool when no text reply is needed, or use it alongside a text response for emphasis. Do NOT use this tool when the user's message is itself a tapback reaction (e.g. 'Liked ...' or 'Loved ...').",
   type: 'custom' as const,
   enabled: true,
   inputSchema: {
