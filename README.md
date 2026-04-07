@@ -57,8 +57,8 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 
 | Chip | Download |
 |------|----------|
-| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-2.0.1-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.0.1/TextMyAgent-2.0.1-arm64.dmg) |
-| **Intel** | [TextMyAgent-2.0.1.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.0.1/TextMyAgent-2.0.1.dmg) |
+| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-2.1.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.1.0/TextMyAgent-2.1.0-arm64.dmg) |
+| **Intel** | [TextMyAgent-2.1.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.1.0/TextMyAgent-2.1.0.dmg) |
 
 > Starting with v1.7.0, all builds are code-signed and notarized by Apple. You should be able to open the app directly without Gatekeeper warnings.
 

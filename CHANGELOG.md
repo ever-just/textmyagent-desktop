@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Multi-language support
 
+## [2.1.0] - 2026-04-07
+
+### Added
+- **Comprehensive core behavior test suite** — 16 new tests in `CoreBehavior.test.ts` verifying:
+  - Multi-bubble response splitting at sentence and paragraph boundaries
+  - Typing indicator delay simulation (800ms min, 3000ms max, scales with response length)
+  - Double-text queue serialization with GUID deduplication and FIFO processing
+  - Chunk delivery with configurable inter-bubble delays and fail-fast on send errors
+- **Advanced behavior test suite** — 23 new tests in `AdvancedBehavior.test.ts` verifying:
+  - Mass response prevention (exactly 1 response per incoming message)
+  - Rate limiting blocks message floods from single user
+  - Agent restart: stale history filtered (>30min), responds to most recent message only
+  - Tool call end-to-end: web search → tool result → intelligent response with appropriate length
+  - Tool calls produce single post-execution response (no double-messaging)
+  - Audio/dictation message handling (voice-to-text treated identically to typed messages)
+  - Tapback filtering (all 6 tapback prefixes verified)
+  - Agentic loop safety: max API calls prevents infinite tool loops
+- **Dynamic version display** — Sidebar version now reads from `package.json` at build time via `NEXT_PUBLIC_APP_VERSION` instead of being hardcoded
+
+### Technical
+- 157 unit tests passing across 7 test files (up from 134)
+- Dashboard version synced with root package version (2.1.0)
+
 ## [2.0.1] - 2026-04-07
 
 ### Fixed

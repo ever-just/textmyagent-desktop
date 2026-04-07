@@ -114,10 +114,10 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* App version footer */}
+      {/* App version footer — reads from package.json at build time */}
       <div className="px-4 mt-auto">
         <p className="text-[11px] text-[var(--color-text-tertiary)] text-center">
-          TextMyAgent v2.0.0
+          TextMyAgent v{process.env.NEXT_PUBLIC_APP_VERSION || '2.1.0'}
         </p>
       </div>
     </aside>

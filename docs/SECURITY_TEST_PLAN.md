@@ -1,7 +1,7 @@
 # TextMyAgent Desktop — Security Test Plan
 
 **Date:** April 7, 2026
-**App Version:** 2.0.1
+**App Version:** 2.1.0
 **Scope:** Full security assessment of the Electron desktop app + Express backend + iMessage integration
 **Based on:** Electron Security Checklist, OWASP Desktop/Web App Guidelines, Sentry Security Review Methodology, Doyensec Electron Pentesting Resources
 
