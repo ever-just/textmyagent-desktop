@@ -81,7 +81,7 @@ router.get('/config', async (_req: Request, res: Response) => {
     
     res.json({
       anthropic: {
-        model: getSettingValue('anthropic.model', 'claude-3-5-haiku-latest'),
+        model: getSettingValue('anthropic.model', 'claude-haiku-4-5-20251001'),
         temperature: getSettingValue('anthropic.temperature', 0.7),
         responseMaxTokens: getSettingValue('anthropic.responseMaxTokens', 350),
         contextWindowTokens: getSettingValue('anthropic.contextWindowTokens', 7000),
@@ -719,7 +719,7 @@ router.post('/setup/test-anthropic', async (req: Request, res: Response) => {
       const Anthropic = require('@anthropic-ai/sdk');
       const testClient = new Anthropic.default({ apiKey: testKey });
       await testClient.messages.create({
-        model: 'claude-3-5-haiku-latest',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1,
         messages: [{ role: 'user', content: 'test' }],
       });

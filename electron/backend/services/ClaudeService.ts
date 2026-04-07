@@ -20,8 +20,8 @@ export interface ClaudeResponse {
 
 export class ClaudeService {
   private client: Anthropic | null = null;
-  private model = 'claude-3-5-haiku-latest';
-  private maxTokens = 1024;
+  private model = 'claude-haiku-4-5-20251001';
+  private maxTokens = 256;
   private temperature = 0.7;
   private initialized = false;
 

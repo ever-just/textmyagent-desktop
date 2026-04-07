@@ -18,14 +18,14 @@ import type { FormatterOptions, FormatterResult } from '../types';
  */
 
 const DEFAULT_OPTIONS: FormatterOptions = {
-  maxResponseChars: 500,
-  hardMaxChars: 2000,
-  maxChunks: 3,
+  maxResponseChars: 300,
+  hardMaxChars: 500,
+  maxChunks: 1,
   chunkDelayMs: 1500,
   stripMarkdown: true,
   allowUrls: false,
   maxCitations: 2,
-  enableSplitting: true,
+  enableSplitting: false,
 };
 
 // Patterns that indicate system prompt leakage

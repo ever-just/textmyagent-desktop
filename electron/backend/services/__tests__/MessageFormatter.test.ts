@@ -171,7 +171,7 @@ describe('MessageFormatter', () => {
   describe('multi-message splitting (Stage 6)', () => {
     it('splits long responses into multiple chunks', () => {
       const text = 'This is sentence one. This is sentence two. This is sentence three. This is sentence four. This is sentence five. This is sentence six. This is sentence seven. This is sentence eight. This is sentence nine. This is sentence ten. This is sentence eleven. This is sentence twelve. This is sentence thirteen. This is sentence fourteen. This is sentence fifteen.';
-      const result = formatter.format(text, { maxResponseChars: 100, enableSplitting: true });
+      const result = formatter.format(text, { maxResponseChars: 100, maxChunks: 3, enableSplitting: true });
       expect(result.chunks.length).toBeGreaterThan(1);
     });
 

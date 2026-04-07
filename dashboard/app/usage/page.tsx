@@ -16,9 +16,11 @@ function formatTokens(n: number): string {
 
 // Per-million-token pricing by model
 const MODEL_PRICING: Record<string, { input: number; output: number; label: string }> = {
-  'claude-3-5-haiku-latest':   { input: 0.80,  output: 4.00,  label: 'Haiku 3.5' },
-  'claude-3-5-sonnet-latest':  { input: 3.00,  output: 15.00, label: 'Sonnet 3.5' },
-  'claude-sonnet-4-20250514':  { input: 3.00,  output: 15.00, label: 'Sonnet 4' },
+  'claude-haiku-4-5-20251001':  { input: 0.80,  output: 4.00,  label: 'Haiku 4.5' },
+  'claude-sonnet-4-5-20250929': { input: 3.00,  output: 15.00, label: 'Sonnet 4.5' },
+  'claude-sonnet-4-20250514':   { input: 3.00,  output: 15.00, label: 'Sonnet 4' },
+  'claude-sonnet-4-6':          { input: 3.00,  output: 15.00, label: 'Sonnet 4.6' },
+  'claude-opus-4-6':            { input: 15.00, output: 75.00, label: 'Opus 4.6' },
 };
 const DEFAULT_PRICING = { input: 3.00, output: 15.00, label: 'default' };
 

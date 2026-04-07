@@ -72,7 +72,7 @@ vi.mock('../ClaudeService', () => ({
       text: 'Hello!',
       inputTokens: 100,
       outputTokens: 50,
-      model: 'claude-3-5-haiku-latest',
+      model: 'claude-haiku-4-5-20251001',
     }),
     setModel: vi.fn(),
     setMaxTokens: vi.fn(),
@@ -203,8 +203,8 @@ describe('H1: Budget per-model pricing', () => {
     // Should NOT have the old hardcoded Haiku-only comment
     expect(source).not.toContain('Approximate cost calculation for Claude 3.5 Haiku');
     // Should have per-model cost map
-    expect(source).toContain('claude-3-5-haiku-latest');
-    expect(source).toContain('claude-3-5-sonnet-latest');
+    expect(source).toContain('claude-haiku-4-5-20251001');
+    expect(source).toContain('claude-sonnet-4-5-20250929');
     expect(source).toContain('claude-sonnet-4-20250514');
     expect(source).toContain('MODEL_COST');
     // Should read model from settings
@@ -219,8 +219,8 @@ describe('H1: Budget per-model pricing', () => {
       'utf-8'
     );
     // Extract the cost map entries — Haiku input=80 vs Sonnet input=300
-    expect(source).toContain("'claude-3-5-haiku-latest':  { input: 80,   output: 400  }");
-    expect(source).toContain("'claude-3-5-sonnet-latest': { input: 300,  output: 1500 }");
+    expect(source).toContain("'claude-haiku-4-5-20251001':  { input: 80,   output: 400  }");
+    expect(source).toContain("'claude-sonnet-4-5-20250929': { input: 300,  output: 1500 }");
   });
 });
 

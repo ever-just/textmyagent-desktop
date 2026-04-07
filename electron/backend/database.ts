@@ -482,7 +482,7 @@ export function seedDefaultSettings(): void {
   const db = getDatabase();
   const defaults: Record<string, string> = {
     // Anthropic
-    'anthropic.model': JSON.stringify('claude-3-5-haiku-latest'),
+    'anthropic.model': JSON.stringify('claude-haiku-4-5-20251001'),
     'anthropic.temperature': JSON.stringify(0.7),
     'anthropic.responseMaxTokens': JSON.stringify(350),
     'anthropic.contextWindowTokens': JSON.stringify(7000),
@@ -540,7 +540,7 @@ export function seedDefaultSettings(): void {
 }
 
 // Record API usage for token tracking
-export function recordApiUsage(inputTokens: number, outputTokens: number, model = 'claude-3-5-haiku-latest'): void {
+export function recordApiUsage(inputTokens: number, outputTokens: number, model = 'claude-haiku-4-5-20251001'): void {
   const db = getDatabase();
   const today = new Date().toISOString().split('T')[0];
   

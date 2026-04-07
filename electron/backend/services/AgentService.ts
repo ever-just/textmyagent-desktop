@@ -163,6 +163,9 @@ export class AgentService extends EventEmitter {
         preview: message.text.substring(0, 50),
       });
 
+      // Always fetch recent history for time awareness context
+      const history = await iMessageService.getConversationHistory(chatGuid, 10);
+
       // Get or create conversation context
       let context = this.conversations.get(chatGuid);
       if (!context) {
@@ -178,7 +181,6 @@ export class AgentService extends EventEmitter {
         // Only attribute "isFromMe" messages as 'assistant' if they exist in our
         // own messages DB — otherwise the user manually sent them and they should
         // be excluded to avoid misattribution (fixes M2).
-        const history = await iMessageService.getConversationHistory(chatGuid, 10);
         const db = getDatabase();
         const conversation = db.prepare(
           'SELECT id FROM conversations WHERE chat_guid = ?'
@@ -192,8 +194,17 @@ export class AgentService extends EventEmitter {
           for (const r of rows) savedAssistantMessages.add(r.content);
         }
 
+        // Filter stale messages: only include messages from the last 30 minutes
+        // to avoid responding to old conversation context when agent restarts
+        const staleThresholdMs = 30 * 60 * 1000; // 30 minutes
+        const now = Date.now();
+
         for (const msg of history) {
           if (msg.guid !== message.guid) {
+            // Skip messages older than the stale threshold
+            const msgAge = now - msg.dateCreated.getTime();
+            if (msgAge > staleThresholdMs) continue;
+
             if (msg.isFromMe) {
               // Only include if this was an agent-sent response
               if (savedAssistantMessages.has(msg.text || '')) {
@@ -243,18 +254,43 @@ export class AgentService extends EventEmitter {
       const isGroupChat = chatGuid.includes(';chat');
       const chatType: 'group' | 'individual' = isGroupChat ? 'group' : 'individual';
 
+      // Calculate time since last message in this conversation for time awareness
+      let timeSinceLastMsg = '';
+      if (history.length > 0) {
+        const lastMsgTime = history[history.length - 1]?.dateCreated?.getTime();
+        if (lastMsgTime) {
+          const elapsed = Date.now() - lastMsgTime;
+          if (elapsed < 60_000) timeSinceLastMsg = 'just now';
+          else if (elapsed < 3600_000) timeSinceLastMsg = `${Math.round(elapsed / 60_000)} min ago`;
+          else if (elapsed < 86400_000) timeSinceLastMsg = `${Math.round(elapsed / 3600_000)} hr ago`;
+          else timeSinceLastMsg = `${Math.round(elapsed / 86400_000)} days ago`;
+        }
+      }
+
+      // Build date context string with time awareness
+      let dateContext = new Date().toLocaleString();
+      if (timeSinceLastMsg) {
+        dateContext += ` (last message in this chat: ${timeSinceLastMsg})`;
+      }
+
       // Generate AI response (Phase 3: pass tool context + prompt context)
       const response = await claudeService.generateResponse(
         message.text,
         context.messages.slice(0, -1), // Exclude the current message (it's passed separately)
         undefined, // systemPrompt — use PromptBuilder default
-        { date: new Date().toLocaleString(), contactName, userFacts, chatType },
+        { date: dateContext, contactName, userFacts, chatType },
         { userId: userHandle, chatGuid }
       );
 
-      // Typing indicator skipped
-
       if (response && response.content) {
+        // Simulate typing indicator: add a human-like delay before sending
+        // based on response length (roughly 30-50 WPM typing speed)
+        const responseLen = response.content.length;
+        const minDelayMs = 800;
+        const maxDelayMs = 3000;
+        const typingDelayMs = Math.min(maxDelayMs, Math.max(minDelayMs, responseLen * 15));
+        await new Promise((resolve) => setTimeout(resolve, typingDelayMs));
+
         // Detect if user asked for links/URLs
         const userAskedForLinks = /\b(link|url|website|source|http)\b/i.test(message.text);
 
@@ -459,13 +495,15 @@ export class AgentService extends EventEmitter {
 
       // Per-model cost calculation ($/1M tokens → cents/1M tokens)
       const MODEL_COST: Record<string, { input: number; output: number }> = {
-        'claude-3-5-haiku-latest':  { input: 80,   output: 400  },
-        'claude-3-5-sonnet-latest': { input: 300,  output: 1500 },
-        'claude-sonnet-4-20250514': { input: 300,  output: 1500 },
+        'claude-haiku-4-5-20251001':  { input: 80,   output: 400  },
+        'claude-sonnet-4-5-20250929': { input: 300,  output: 1500 },
+        'claude-sonnet-4-20250514':   { input: 300,  output: 1500 },
+        'claude-sonnet-4-6':          { input: 300,  output: 1500 },
+        'claude-opus-4-6':            { input: 1500, output: 7500 },
       };
       const DEFAULT_COST = { input: 300, output: 1500 };
 
-      let model = 'claude-3-5-haiku-latest';
+      let model = 'claude-haiku-4-5-20251001';
       try {
         const raw = getSetting('anthropic.model');
         if (raw) model = JSON.parse(raw);
