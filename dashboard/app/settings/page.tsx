@@ -7,7 +7,7 @@ import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { PageHeader } from '@/components/PageHeader';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { Save, Key, TestTube, CheckCircle2, XCircle, Info, User, Shield, Wrench, Brain, Clock } from 'lucide-react';
+import { Save, Key, TestTube, CheckCircle2, XCircle, Info, User, Shield, Wrench, Brain, Clock, Users, Plus, X } from 'lucide-react';
 
 type SettingsTab = 'general' | 'persona' | 'tools' | 'memory' | 'security';
 
@@ -42,6 +42,13 @@ export default function SettingsPage() {
   const [searchHistory, setSearchHistory] = useState(true);
   const [reminders, setReminders] = useState(true);
   const [triggers, setTriggers] = useState(true);
+  const [reactions, setReactions] = useState(true);
+  const [waitTool, setWaitTool] = useState(true);
+
+  // Contact allowlist state
+  const [replyMode, setReplyMode] = useState<'everyone' | 'allowlist'>('everyone');
+  const [allowedContacts, setAllowedContacts] = useState<string[]>([]);
+  const [newContact, setNewContact] = useState('');
 
   // Memory form state
   const [factTTLDays, setFactTTLDays] = useState(90);
@@ -93,6 +100,11 @@ export default function SettingsPage() {
       setSearchHistory(s['tools.searchHistory'] ?? true);
       setReminders(s['tools.reminders'] ?? true);
       setTriggers(s['tools.triggers'] ?? true);
+      setReactions(s['tools.reactions'] ?? true);
+      setWaitTool(s['tools.waitTool'] ?? true);
+      // Contact allowlist
+      setReplyMode(s['agent.replyMode'] ?? 'everyone');
+      setAllowedContacts(s['agent.allowedContacts'] ?? []);
       setFactTTLDays(s['memory.factTTLDays'] ?? 90);
       setMaxFactsPerUser(s['memory.maxFactsPerUser'] ?? 50);
       setRateLimitPerMinute(s['security.rateLimitPerMinute'] ?? 10);
@@ -135,6 +147,11 @@ export default function SettingsPage() {
         'tools.searchHistory': searchHistory,
         'tools.reminders': reminders,
         'tools.triggers': triggers,
+        'tools.reactions': reactions,
+        'tools.waitTool': waitTool,
+        // Contact allowlist
+        'agent.replyMode': replyMode,
+        'agent.allowedContacts': allowedContacts,
         // Memory
         'memory.factTTLDays': factTTLDays,
         'memory.maxFactsPerUser': maxFactsPerUser,
@@ -358,6 +375,99 @@ export default function SettingsPage() {
               </div>
             </div>
           </Card>
+
+          {/* Contact Allowlist */}
+          <Card className="mb-6">
+            <h2 className="text-[14px] font-semibold mb-2 flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Who Can Text the Agent
+            </h2>
+            <p className="text-[12px] text-[var(--color-text-secondary)] mb-4">
+              Choose whether the agent responds to everyone or only specific contacts.
+            </p>
+            <div className="space-y-4">
+              <div className="flex gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="replyMode"
+                    value="everyone"
+                    checked={replyMode === 'everyone'}
+                    onChange={() => setReplyMode('everyone')}
+                    className="accent-[var(--color-brand)]"
+                  />
+                  <span className="text-[13px]">Reply to everyone</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="replyMode"
+                    value="allowlist"
+                    checked={replyMode === 'allowlist'}
+                    onChange={() => setReplyMode('allowlist')}
+                    className="accent-[var(--color-brand)]"
+                  />
+                  <span className="text-[13px]">Only selected contacts</span>
+                </label>
+              </div>
+
+              {replyMode === 'allowlist' && (
+                <div className="border-t border-[var(--color-border)] pt-3">
+                  <label className={labelCls}>Allowed Contacts</label>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={newContact}
+                      onChange={(e) => setNewContact(e.target.value)}
+                      placeholder="+1 (555) 123-4567"
+                      className={inputCls + ' flex-1'}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newContact.trim()) {
+                          setAllowedContacts([...allowedContacts, newContact.trim()]);
+                          setNewContact('');
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Plus className="w-3.5 h-3.5" />}
+                      onClick={() => {
+                        if (newContact.trim()) {
+                          setAllowedContacts([...allowedContacts, newContact.trim()]);
+                          setNewContact('');
+                        }
+                      }}
+                      disabled={!newContact.trim()}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                  {allowedContacts.length === 0 ? (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                      No contacts added yet. The agent won&apos;t respond to anyone until you add contacts.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      {allowedContacts.map((contact, i) => (
+                        <div key={i} className="flex items-center justify-between py-1 px-2 rounded bg-[var(--color-bg-tertiary)] text-[12px]">
+                          <span className="font-mono">{contact}</span>
+                          <button
+                            onClick={() => setAllowedContacts(allowedContacts.filter((_, idx) => idx !== i))}
+                            className="text-[var(--color-text-tertiary)] hover:text-red-500 transition-colors"
+                            aria-label={`Remove ${contact}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className={helpCls}>Phone numbers are normalized for matching (last 10 digits).</p>
+                </div>
+              )}
+            </div>
+          </Card>
         </>
       )}
 
@@ -435,6 +545,11 @@ export default function SettingsPage() {
                   <ToggleRow label="Search History" checked={searchHistory} onChange={setSearchHistory} />
                   <ToggleRow label="Reminders" checked={reminders} onChange={setReminders} />
                   <ToggleRow label="Triggers" checked={triggers} onChange={setTriggers} />
+                </div>
+                <div className="border-t border-[var(--color-border)] pt-3">
+                  <p className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-2">Interaction Tools</p>
+                  <ToggleRow label="Reactions (tapback-style emoji responses)" checked={reactions} onChange={setReactions} />
+                  <ToggleRow label="Wait (agent can choose not to reply)" checked={waitTool} onChange={setWaitTool} />
                 </div>
               </>
             )}

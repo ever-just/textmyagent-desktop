@@ -818,6 +818,42 @@ router.post('/messages/send', async (req: Request, res: Response) => {
   }
 });
 
+// --- Contact Allowlist ---
+router.get('/agent/contacts', async (_req: Request, res: Response) => {
+  try {
+    const replyModeRaw = getSetting('agent.replyMode');
+    const allowedRaw = getSetting('agent.allowedContacts');
+    res.json({
+      replyMode: replyModeRaw ? JSON.parse(replyModeRaw) : 'everyone',
+      allowedContacts: allowedRaw ? JSON.parse(allowedRaw) : [],
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/agent/contacts', async (req: Request, res: Response) => {
+  try {
+    const { replyMode, allowedContacts } = req.body;
+    if (replyMode !== undefined) {
+      if (!['everyone', 'allowlist'].includes(replyMode)) {
+        return res.status(400).json({ error: 'replyMode must be "everyone" or "allowlist"' });
+      }
+      setSetting('agent.replyMode', JSON.stringify(replyMode));
+    }
+    if (allowedContacts !== undefined) {
+      if (!Array.isArray(allowedContacts)) {
+        return res.status(400).json({ error: 'allowedContacts must be an array of strings' });
+      }
+      setSetting('agent.allowedContacts', JSON.stringify(allowedContacts));
+    }
+    log('info', 'Contact allowlist updated', { replyMode, contactCount: allowedContacts?.length });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- Prompt Preview ---
 router.get('/prompt/preview', async (_req: Request, res: Response) => {
   try {

@@ -126,6 +126,26 @@ export class AgentService extends EventEmitter {
       // If DB query fails, allow message through rather than silently dropping
     }
 
+    // Contact allowlist check: skip if user not in allowed contacts
+    try {
+      const replyModeRaw = getSetting('agent.replyMode');
+      const replyMode = replyModeRaw ? JSON.parse(replyModeRaw) : 'everyone';
+      if (replyMode === 'allowlist') {
+        const allowedRaw = getSetting('agent.allowedContacts');
+        const allowed = allowedRaw ? JSON.parse(allowedRaw) as string[] : [];
+        // Normalize: strip everything except digits for comparison
+        const normalize = (h: string) => h.replace(/[^\d]/g, '').slice(-10);
+        const userNorm = normalize(userHandle);
+        const isAllowed = allowed.some((c: string) => normalize(c) === userNorm);
+        if (!isAllowed) {
+          log('info', 'Skipping message — contact not in allowlist', { handle: userHandle });
+          return;
+        }
+      }
+    } catch {
+      // If settings parse fails, allow message through
+    }
+
     // Rate limit check (Phase 1, task 1.2)
     const rateCheck = rateLimiter.checkLimit(userHandle);
     if (!rateCheck.allowed) {
@@ -281,6 +301,17 @@ export class AgentService extends EventEmitter {
         { date: dateContext, contactName, userFacts, chatType },
         { userId: userHandle, chatGuid }
       );
+
+      // If agent called 'wait' tool, skip sending a text response entirely
+      if (response && response.toolsUsed?.includes('wait')) {
+        log('info', 'Agent chose to wait — no text response sent', {
+          chatGuid,
+          toolsUsed: response.toolsUsed,
+        });
+        // Save user message to DB even if we didn't respond
+        this.saveMessageToDb(chatGuid, userHandle, message.text, '');
+        return;
+      }
 
       if (response && response.content) {
         // Simulate typing indicator: add a human-like delay before sending

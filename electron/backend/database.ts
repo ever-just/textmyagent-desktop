@@ -519,6 +519,11 @@ export function seedDefaultSettings(): void {
     'tools.saveUserFact': JSON.stringify(true),
     'tools.getUserFacts': JSON.stringify(true),
     'tools.searchHistory': JSON.stringify(true),
+    'tools.reactions': JSON.stringify(true),
+    'tools.waitTool': JSON.stringify(true),
+    // Contact allowlist
+    'agent.replyMode': JSON.stringify('everyone'),
+    'agent.allowedContacts': JSON.stringify([]),
     // Polling
     'polling.activeIntervalMs': JSON.stringify(2000),
     'polling.idleIntervalMs': JSON.stringify(5000),

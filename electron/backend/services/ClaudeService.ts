@@ -16,6 +16,7 @@ export interface ClaudeResponse {
   inputTokens: number;
   outputTokens: number;
   stopReason: string;
+  toolsUsed: string[];
 }
 
 export class ClaudeService {
@@ -102,6 +103,7 @@ export class ClaudeService {
       let apiCallCount = 0;
       let finalContent = '';
       let lastStopReason = 'end_turn';
+      const toolsUsed: string[] = [];
 
       // Agentic loop: keep calling Claude until we get a text response (no more tool_use)
       while (apiCallCount < maxApiCalls) {
@@ -163,6 +165,7 @@ export class ClaudeService {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const block of toolUseBlocks) {
           if (block.type === 'tool_use') {
+            toolsUsed.push(block.name);
             const toolDef = toolRegistry.getDefinitions().find((d) => d.name === block.name);
 
             if (toolDef?.type === 'anthropic_server') {
@@ -201,7 +204,7 @@ export class ClaudeService {
         }
       }
 
-      if (!finalContent) {
+      if (!finalContent && toolsUsed.length === 0) {
         log('warn', 'No text content in Claude response after tool loop');
         return null;
       }
@@ -211,6 +214,7 @@ export class ClaudeService {
         totalOutputTokens,
         apiCalls: apiCallCount,
         stopReason: lastStopReason,
+        toolsUsed,
       });
 
       return {
@@ -218,6 +222,7 @@ export class ClaudeService {
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
         stopReason: lastStopReason,
+        toolsUsed,
       };
     } catch (error: any) {
       log('error', 'Claude API error', { error: error.message });
