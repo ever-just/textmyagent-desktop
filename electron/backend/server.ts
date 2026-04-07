@@ -5,12 +5,21 @@ import { app as electronApp } from 'electron';
 import path from 'path';
 import http from 'http';
 import dashboardRoutes from './routes/dashboard';
+import securityRoutes from './routes/security';
+import memoryRoutes from './routes/memory';
+import toolsRoutes from './routes/tools';
 import { setupSecureStorageIPC } from '../utils/secure-storage';
 import { agentService } from './services/AgentService';
+import { reminderService } from './services/ReminderService';
+import { triggerService } from './services/TriggerService';
+import { rateLimiter } from './services/RateLimiter';
+import { memoryService } from './services/MemoryService';
 
 let server: http.Server | null = null;
 let expressApp: Express | null = null;
 const activeConnections = new Set<import('net').Socket>();
+let rateLimiterCleanupInterval: NodeJS.Timeout | null = null;
+let factExpirationInterval: NodeJS.Timeout | null = null;
 
 export interface ServerConfig {
   port?: number;
@@ -77,6 +86,9 @@ export async function startBackendServer(config: ServerConfig = {}): Promise<num
 
   // Mount dashboard routes
   expressApp.use('/api/dashboard', dashboardRoutes);
+  expressApp.use('/api/dashboard/security', securityRoutes);
+  expressApp.use('/api/dashboard/memory', memoryRoutes);
+  expressApp.use('/api/dashboard/tools', toolsRoutes);
 
   // Serve static dashboard files in packaged app
   if (electronApp.isPackaged) {
@@ -124,6 +136,14 @@ export async function startBackendServer(config: ServerConfig = {}): Promise<num
         const started = await agentService.start();
         if (started) {
           console.log('[Backend] Agent auto-started successfully');
+          // Start background services alongside agent
+          reminderService.start();
+          triggerService.start();
+
+          // Periodic maintenance tasks
+          rateLimiterCleanupInterval = setInterval(() => rateLimiter.cleanup(), 5 * 60_000); // every 5 min
+          factExpirationInterval = setInterval(() => memoryService.expireOldFacts(), 24 * 60 * 60_000); // every 24 hr
+          memoryService.expireOldFacts(); // run once on startup
         } else {
           console.log('[Backend] Agent not auto-started (not configured or missing permissions)');
         }
@@ -140,6 +160,12 @@ export async function startBackendServer(config: ServerConfig = {}): Promise<num
 
 export async function stopBackendServer(): Promise<void> {
   return new Promise((resolve) => {
+    // Stop background services and maintenance intervals
+    triggerService.stop();
+    reminderService.stop();
+    if (rateLimiterCleanupInterval) { clearInterval(rateLimiterCleanupInterval); rateLimiterCleanupInterval = null; }
+    if (factExpirationInterval) { clearInterval(factExpirationInterval); factExpirationInterval = null; }
+
     if (server) {
       // Stop accepting new connections
       server.close(() => {

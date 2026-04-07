@@ -25,10 +25,13 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 ## Features
 
 - **🍎 Native iMessage Integration** - Reads and responds to messages directly from your Messages app
-- **🤖 Claude AI Powered** - Uses Anthropic's Claude 3.5 Haiku for intelligent, context-aware responses
+- **🤖 Claude AI Powered** - Uses Anthropic's Claude (Haiku or Sonnet) for intelligent, context-aware responses
 - **🔒 Privacy First** - All data stays on your Mac in a local SQLite database
 - **📊 Dashboard** - Beautiful Next.js dashboard for monitoring and configuration
 - **⚡ Real-time** - 2-second polling for near-instant responses
+- **🧠 Memory System** - Remembers user facts and preferences across conversations with automatic expiration
+- **⏰ Reminders & Triggers** - Schedule reminders and create automation triggers via natural language
+- **👤 Contact Resolution** - Resolves phone numbers to real names via macOS Contacts
 - **🔐 Production Ready** - Hardened runtime, Developer ID code signing, and Apple notarization
 - **🔄 Auto-Update** - Built-in update checking with user-controlled downloads
 
@@ -54,8 +57,8 @@ TextMyAgent Desktop is a native macOS application that provides an AI-powered ex
 
 | Chip | Download |
 |------|----------|
-| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-1.7.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.7.0/TextMyAgent-1.7.0-arm64.dmg) |
-| **Intel** | [TextMyAgent-1.7.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v1.7.0/TextMyAgent-1.7.0.dmg) |
+| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-2.0.1-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.0.1/TextMyAgent-2.0.1-arm64.dmg) |
+| **Intel** | [TextMyAgent-2.0.1.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.0.1/TextMyAgent-2.0.1.dmg) |
 
 > Starting with v1.7.0, all builds are code-signed and notarized by Apple. You should be able to open the app directly without Gatekeeper warnings.
 
@@ -136,8 +139,11 @@ Once configured, TextMyAgent will:
 | **Overview** | System status, agent state, quick stats |
 | **Messages** | View all conversations and message history |
 | **Users** | Manage contacts who have messaged you |
+| **Tools** | Manage AI tools, reminders, and automation triggers |
+| **Memory** | View and manage user facts, summaries, and knowledge |
 | **Logs** | Real-time application logs |
 | **Usage** | API token usage and costs |
+| **Security** | Rate limiting, budget controls, security events |
 | **Settings** | API keys, permissions, configuration |
 
 ## Development

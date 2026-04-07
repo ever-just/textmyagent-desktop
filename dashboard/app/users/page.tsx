@@ -2,17 +2,31 @@
 
 import { useState } from 'react';
 import { useUsers, useUserMessages } from '@/lib/hooks';
+import { blockUser, unblockUser } from '@/lib/api';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { Users, User, Bot, ArrowLeft, MessageSquare } from 'lucide-react';
+import { Users, User, Bot, ArrowLeft, MessageSquare, ShieldOff, ShieldAlert } from 'lucide-react';
 import { Button } from '@/components/Button';
 
 export default function UsersPage() {
-  const { data, error, isLoading } = useUsers();
+  const { data, error, isLoading, mutate } = useUsers();
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const { data: userMsgs, isLoading: msgsLoading } = useUserMessages(selectedUserId);
+
+  const handleToggleBlock = async (userId: string, currentlyBlocked: boolean) => {
+    try {
+      if (currentlyBlocked) {
+        await unblockUser(userId);
+      } else {
+        await blockUser(userId);
+      }
+      mutate();
+    } catch (err) {
+      console.error('Failed to toggle block status:', err);
+    }
+  };
 
   const selectedUser = data?.users?.find((u) => u.id === selectedUserId);
 
@@ -128,15 +142,37 @@ export default function UsersPage() {
                     <p className="text-[13px] font-semibold truncate">{user.displayName || user.handle}</p>
                     <p className="text-[12px] text-[var(--color-text-tertiary)] truncate">{user.handle}</p>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-[12px] text-[var(--color-text-secondary)]">
-                      {user.conversationCount} conversation{user.conversationCount !== 1 ? 's' : ''}
-                    </p>
-                    {user.lastMessageAt && (
-                      <time className="text-[11px] text-[var(--color-text-tertiary)]" dateTime={user.lastMessageAt}>
-                        {new Date(user.lastMessageAt).toLocaleDateString()}
-                      </time>
-                    )}
+                  <div className="text-right flex-shrink-0 flex items-center gap-2">
+                    <div>
+                      <p className="text-[12px] text-[var(--color-text-secondary)]">
+                        {user.conversationCount} conversation{user.conversationCount !== 1 ? 's' : ''}
+                      </p>
+                      {user.lastMessageAt && (
+                        <time className="text-[11px] text-[var(--color-text-tertiary)]" dateTime={user.lastMessageAt}>
+                          {new Date(user.lastMessageAt).toLocaleDateString()}
+                        </time>
+                      )}
+                    </div>
+                    {user.isBlocked ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-950/40">
+                        <ShieldAlert className="w-3 h-3" /> Blocked
+                      </span>
+                    ) : null}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleBlock(user.id, !!user.isBlocked);
+                      }}
+                      className={`p-1.5 rounded-md transition-colors ${
+                        user.isBlocked
+                          ? 'text-emerald-600 hover:bg-emerald-100 dark:hover:bg-emerald-950/40'
+                          : 'text-red-500 hover:bg-red-100 dark:hover:bg-red-950/40'
+                      }`}
+                      title={user.isBlocked ? 'Unblock user' : 'Block user'}
+                      aria-label={user.isBlocked ? `Unblock ${user.displayName || user.handle}` : `Block ${user.displayName || user.handle}`}
+                    >
+                      {user.isBlocked ? <ShieldOff className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
               </Card>

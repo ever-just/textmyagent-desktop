@@ -5,6 +5,7 @@ import { SecureStorage } from '../../utils/secure-storage';
 import { agentService } from '../services/AgentService';
 import { iMessageService } from '../services/iMessageService';
 import { claudeService } from '../services/ClaudeService';
+import { promptBuilder } from '../services/PromptBuilder';
 import { log, logBuffer, logSubscribers } from '../logger';
 export type { LogEntry } from '../logger';
 export { log, logBuffer };
@@ -34,7 +35,7 @@ router.get('/status', async (_req: Request, res: Response) => {
         status: 'online',
         uptime: process.uptime(),
         memory: process.memoryUsage().heapUsed,
-        version: electronApp?.getVersion() || '1.6.0',
+        version: electronApp?.getVersion() || '1.7.0',
         isPackaged: electronApp?.isPackaged || false,
       },
       database: {
@@ -93,10 +94,18 @@ router.get('/config', async (_req: Request, res: Response) => {
         error: imessageStatus.error,
       },
       app: {
-        version: getElectronApp()?.getVersion() || '1.6.0',
+        version: getElectronApp()?.getVersion() || '1.7.0',
         platform: process.platform,
         arch: process.arch,
       },
+      settings: (() => {
+        const allSettings: Record<string, any> = {};
+        const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+        for (const row of rows) {
+          try { allSettings[row.key] = JSON.parse(row.value); } catch { allSettings[row.key] = row.value; }
+        }
+        return allSettings;
+      })(),
     });
   } catch (error) {
     log('error', 'Get config failed', { error: String(error) });
@@ -104,13 +113,74 @@ router.get('/config', async (_req: Request, res: Response) => {
   }
 });
 
+// Settings key allowlist with expected types (fixes Pre-Phase 0.3)
+const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
+  // Anthropic
+  'anthropic.model': 'string',
+  'anthropic.temperature': 'number',
+  'anthropic.responseMaxTokens': 'number',
+  'anthropic.contextWindowTokens': 'number',
+  'anthropic.enableWebSearch': 'boolean',
+  // iMessage
+  'imessage.sendEnabled': 'boolean',
+  // Agent behavior
+  'agent.maxResponseChars': 'number',
+  'agent.multiMessageSplit': 'boolean',
+  'agent.splitDelaySeconds': 'number',
+  'agent.name': 'string',
+  'agent.identity': 'string',
+  'agent.persona': 'string',
+  'agent.guidelines': 'string',
+  'agent.safety': 'string',
+  'agent.format': 'string',
+  // Security
+  'security.rateLimitPerMinute': 'number',
+  'security.rateLimitGlobalPerHour': 'number',
+  'security.dailyBudgetCents': 'number',
+  'security.maxApiCallsPerMessage': 'number',
+  'security.outputSanitization': 'boolean',
+  // Memory
+  'memory.factTTLDays': 'number',
+  'memory.maxFactsPerUser': 'number',
+  'memory.enableSummarization': 'boolean',
+  // Tools
+  'tools.enabled': 'boolean',
+  'tools.webSearch': 'boolean',
+  'tools.webSearchMaxUses': 'number',
+  'tools.webFetch': 'boolean',
+  'tools.webFetchMaxTokens': 'number',
+  'tools.reminders': 'boolean',
+  'tools.triggers': 'boolean',
+  'tools.saveUserFact': 'boolean',
+  'tools.getUserFacts': 'boolean',
+  'tools.searchHistory': 'boolean',
+  // Polling
+  'polling.activeIntervalMs': 'number',
+  'polling.idleIntervalMs': 'number',
+  'polling.sleepIntervalMs': 'number',
+};
+
 router.put('/config', async (req: Request, res: Response) => {
   try {
     const updates = req.body;
+    const rejected: string[] = [];
 
-    // Update settings in SQLite
+    // Validate against allowlist and type-check
     for (const [key, value] of Object.entries(updates)) {
+      const expectedType = ALLOWED_SETTINGS[key];
+      if (!expectedType) {
+        rejected.push(key);
+        continue;
+      }
+      if (typeof value !== expectedType) {
+        rejected.push(key);
+        continue;
+      }
       setSetting(key, JSON.stringify(value));
+    }
+
+    if (rejected.length > 0) {
+      log('warn', 'Settings keys rejected by allowlist', { rejected });
     }
 
     // Propagate config changes to live services (fixes B5)
@@ -124,8 +194,8 @@ router.put('/config', async (req: Request, res: Response) => {
       claudeService.setTemperature(Number(updates['anthropic.temperature']));
     }
 
-    log('info', 'Configuration updated', { keys: Object.keys(updates) });
-    res.json({ success: true });
+    log('info', 'Configuration updated', { keys: Object.keys(updates), rejected });
+    res.json({ success: true, rejected: rejected.length > 0 ? rejected : undefined });
   } catch (error) {
     log('error', 'Update config failed', { error: String(error) });
     res.status(500).json({ error: 'Failed to update config' });
@@ -744,6 +814,17 @@ router.post('/messages/send', async (req: Request, res: Response) => {
     }
   } catch (error: any) {
     log('error', 'Send message failed', { error: error.message });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Prompt Preview ---
+router.get('/prompt/preview', async (_req: Request, res: Response) => {
+  try {
+    const preview = promptBuilder.preview({ date: new Date().toLocaleString() });
+    res.json(preview);
+  } catch (error: any) {
+    log('error', 'Prompt preview failed', { error: error.message });
     res.status(500).json({ error: error.message });
   }
 });

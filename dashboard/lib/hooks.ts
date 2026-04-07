@@ -48,3 +48,39 @@ export function useUsage(period: 'day' | 'week' | 'month' = 'day') {
 export function useLogs(level?: string, search?: string) {
   return useSWR(`logs-${level}-${search}`, () => fetcher(() => api.getLogs(level, search)));
 }
+
+export function useSecurityEvents(severity?: string, limit = 50) {
+  return useSWR(`security-events-${severity}-${limit}`, () => fetcher(() => api.getSecurityEvents(severity, limit)), { refreshInterval: 10000, ...RETRY_OPTS });
+}
+
+export function useSecurityConfig() {
+  return useSWR('security-config', () => fetcher(() => api.getSecurityConfig()), RETRY_OPTS);
+}
+
+export function useBudgetStatus() {
+  return useSWR('budget-status', () => fetcher(() => api.getBudgetStatus()), { refreshInterval: 10000, ...RETRY_OPTS });
+}
+
+export function useBlockedUsers() {
+  return useSWR('blocked-users', () => fetcher(() => api.getBlockedUsers()), RETRY_OPTS);
+}
+
+export function useMemoryStats() {
+  return useSWR('memory-stats', () => fetcher(() => api.getMemoryStats()), { refreshInterval: 15000, ...RETRY_OPTS });
+}
+
+export function useToolDefinitions() {
+  return useSWR('tool-definitions', () => fetcher(() => api.getToolDefinitions()), RETRY_OPTS);
+}
+
+export function useToolExecutions(limit = 50) {
+  return useSWR(`tool-executions-${limit}`, () => fetcher(() => api.getToolExecutions(limit)), { refreshInterval: 10000, ...RETRY_OPTS });
+}
+
+export function useReminders(status?: string) {
+  return useSWR(`reminders-${status}`, () => fetcher(() => api.getReminders(status)), { refreshInterval: 10000, ...RETRY_OPTS });
+}
+
+export function useTriggers() {
+  return useSWR('triggers', () => fetcher(() => api.getTriggers()), { refreshInterval: 10000, ...RETRY_OPTS });
+}

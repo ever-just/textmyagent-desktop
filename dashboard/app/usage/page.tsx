@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useUsage } from '@/lib/hooks';
+import { useUsage, useConfig } from '@/lib/hooks';
 import { Card, StatCard } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/EmptyState';
@@ -14,10 +14,18 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function estimateCost(inputTokens: number, outputTokens: number): string {
-  // Approximate pricing for Claude 3.5 Haiku
-  const inputCost = (inputTokens / 1_000_000) * 0.25;
-  const outputCost = (outputTokens / 1_000_000) * 1.25;
+// Per-million-token pricing by model
+const MODEL_PRICING: Record<string, { input: number; output: number; label: string }> = {
+  'claude-3-5-haiku-latest':   { input: 0.80,  output: 4.00,  label: 'Haiku 3.5' },
+  'claude-3-5-sonnet-latest':  { input: 3.00,  output: 15.00, label: 'Sonnet 3.5' },
+  'claude-sonnet-4-20250514':  { input: 3.00,  output: 15.00, label: 'Sonnet 4' },
+};
+const DEFAULT_PRICING = { input: 3.00, output: 15.00, label: 'default' };
+
+function estimateCost(inputTokens: number, outputTokens: number, model?: string): string {
+  const pricing = (model && MODEL_PRICING[model]) || DEFAULT_PRICING;
+  const inputCost = (inputTokens / 1_000_000) * pricing.input;
+  const outputCost = (outputTokens / 1_000_000) * pricing.output;
   const total = inputCost + outputCost;
   if (total < 0.01) return '< $0.01';
   return `$${total.toFixed(2)}`;
@@ -26,6 +34,8 @@ function estimateCost(inputTokens: number, outputTokens: number): string {
 export default function UsagePage() {
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
   const { data, error, isLoading } = useUsage(period);
+  const { data: config } = useConfig();
+  const currentModel = config?.anthropic?.model;
 
   return (
     <div className="p-6">
@@ -81,8 +91,8 @@ export default function UsagePage() {
             />
             <StatCard
               label="Estimated Cost"
-              value={estimateCost(data.totals.inputTokens, data.totals.outputTokens)}
-              subtitle="Based on Haiku pricing"
+              value={estimateCost(data.totals.inputTokens, data.totals.outputTokens, currentModel)}
+              subtitle={`Based on ${(currentModel && MODEL_PRICING[currentModel]?.label) || 'default'} pricing`}
               icon={<Coins className="w-5 h-5" />}
             />
             <StatCard
@@ -127,7 +137,7 @@ export default function UsagePage() {
                         <td className="py-2 px-4 text-right font-mono text-[var(--color-text-secondary)]">{formatTokens(row.outputTokens)}</td>
                         <td className="py-2 px-4 text-right font-mono font-medium">{formatTokens(row.totalTokens)}</td>
                         <td className="py-2 px-4 text-right font-mono text-[var(--color-text-secondary)]">{row.requestCount}</td>
-                        <td className="py-2 pl-4 text-right font-mono text-[var(--color-text-secondary)]">{estimateCost(row.inputTokens, row.outputTokens)}</td>
+                        <td className="py-2 pl-4 text-right font-mono text-[var(--color-text-secondary)]">{estimateCost(row.inputTokens, row.outputTokens, currentModel)}</td>
                       </tr>
                     ))}
                   </tbody>

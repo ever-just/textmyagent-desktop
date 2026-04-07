@@ -40,11 +40,21 @@ textmyagent-desktop/
 │   │   ├── logger.ts             # Log buffer, SSE broadcast, LogEntry type
 │   │   ├── routes/
 │   │   │   └── dashboard.ts      # All API endpoints
+│   │   ├── tools/                   # AI tool implementations
+│   │   │   ├── setReminder.ts       # Reminder scheduling
+│   │   │   └── createTrigger.ts     # Automation triggers
 │   │   └── services/
 │   │       ├── AgentService.ts       # Message processing orchestration
 │   │       ├── iMessageService.ts    # iMessage database polling
 │   │       ├── ClaudeService.ts      # Anthropic Claude API
-│   │       └── PermissionService.ts  # macOS permission checks
+│   │       ├── PermissionService.ts  # macOS permission checks
+│   │       ├── ReminderService.ts    # Reminder polling and delivery
+│   │       ├── TriggerService.ts     # Trigger evaluation and firing
+│   │       ├── MemoryService.ts      # User fact storage and expiration
+│   │       ├── PromptBuilder.ts      # System prompt construction
+│   │       ├── ToolRegistry.ts       # Tool definition and execution
+│   │       ├── RateLimiter.ts        # Per-user and global rate limiting
+│   │       └── MessageFormatter.ts   # Response formatting and splitting
 │   └── utils/
 │       ├── secure-storage.ts     # Keychain API key storage
 │       ├── auto-updater.ts       # Electron auto-update
@@ -142,9 +152,11 @@ SQLite database stored at `~/Library/Application Support/textmyagent-desktop/tex
 | `messages` | Message history (user/assistant/system) |
 | `settings` | Key-value configuration store |
 | `api_usage` | Token usage tracking per day |
-| `reminders` | Scheduled reminders (future) |
-| `triggers` | Automation triggers (future) |
-| `context` | User context/memory (future) |
+| `reminders` | Scheduled reminders (`chat_guid`, `due_at`, `is_sent`) |
+| `triggers` | Automation triggers (`chat_guid`, `message`, `last_fired_at`) |
+| `user_facts` | User memory facts with type and expiration |
+| `tool_executions` | Tool call history and results |
+| `context` | Conversation summaries |
 | `_migrations` | Schema version tracking |
 
 ### Entity Relationships

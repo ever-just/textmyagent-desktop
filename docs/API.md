@@ -16,7 +16,7 @@ Returns application health status.
 ```json
 {
   "status": "ok",
-  "version": "1.6.0-alpha.1",
+  "version": "2.0.1",
   "packaged": true,
   "platform": "darwin",
   "arch": "x64"
@@ -42,7 +42,7 @@ Returns overall system status.
     "status": "online",
     "uptime": 3600.5,
     "memory": 52428800,
-    "version": "1.6.0-alpha.1",
+    "version": "2.0.1",
     "isPackaged": true
   },
   "database": {
@@ -77,7 +77,7 @@ Returns application configuration.
     "sendEnabled": true
   },
   "app": {
-    "version": "1.6.0-alpha.1",
+    "version": "2.0.1",
     "platform": "darwin",
     "arch": "x64"
   }
@@ -504,6 +504,139 @@ Request Contacts permission.
   "success": true,
   "status": "granted",
   "needsSettings": false
+}
+```
+
+---
+
+### Tools
+
+#### GET /tools/definitions
+
+Returns all registered tool definitions.
+
+**Response:**
+```json
+{
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Search the web",
+      "enabled": true
+    }
+  ]
+}
+```
+
+#### GET /tools/executions
+
+Returns recent tool execution history.
+
+**Query Parameters:**
+- `limit` (default: 50) - Number of executions
+
+**Response:**
+```json
+{
+  "executions": [
+    {
+      "id": "uuid",
+      "tool_name": "web_search",
+      "input": "{}",
+      "output": "{}",
+      "status": "success",
+      "created_at": "2026-04-07 12:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### Reminders
+
+#### GET /reminders
+
+Returns all reminders.
+
+**Response:**
+```json
+{
+  "reminders": [
+    {
+      "id": "uuid",
+      "user_id": "uuid",
+      "chat_guid": "iMessage;-;+15551234567",
+      "message": "Call dentist",
+      "due_at": "2026-04-08 09:00:00",
+      "is_sent": 0,
+      "created_at": "2026-04-07 12:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### Triggers
+
+#### GET /triggers
+
+Returns all automation triggers.
+
+**Response:**
+```json
+{
+  "triggers": [
+    {
+      "id": "uuid",
+      "user_id": "uuid",
+      "chat_guid": "iMessage;-;+15551234567",
+      "name": "Daily weather",
+      "message": "Send weather update",
+      "schedule": "0 8 * * *",
+      "is_active": 1,
+      "last_fired_at": null,
+      "created_at": "2026-04-07 12:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### Memory
+
+#### GET /memory/stats
+
+Returns memory system statistics.
+
+**Response:**
+```json
+{
+  "totalFacts": 42,
+  "totalSummaries": 5,
+  "factsByType": {
+    "preference": 15,
+    "personal": 12,
+    "behavioral": 10,
+    "general": 5
+  }
+}
+```
+
+#### GET /memory/users/:userId/facts
+
+Returns facts stored for a specific user.
+
+#### POST /memory/expire
+
+Expires old facts past their TTL.
+
+**Response:**
+```json
+{
+  "expiredCount": 3
 }
 ```
 

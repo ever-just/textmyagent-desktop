@@ -69,6 +69,7 @@ export async function getConfig() {
     };
     imessage: { configured: boolean; sendEnabled: boolean; error?: string };
     app: { version: string; platform: string; arch: string };
+    settings: Record<string, any>;
   }>('/config');
 }
 
@@ -218,6 +219,186 @@ export function createLogStream(onMessage: (entry: LogEntry) => void, onError?: 
   };
   es.onerror = (err) => onError?.(err);
   return es;
+}
+
+// --- Memory ---
+export interface UserFact {
+  id: string;
+  userId: string;
+  type: 'preference' | 'personal' | 'behavioral' | 'general';
+  content: string;
+  source: string;
+  confidence: number;
+  lastUsedAt: string;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+export interface MemoryStats {
+  totalFacts: number;
+  totalSummaries: number;
+  factsByType: Record<string, number>;
+  userCount: number;
+}
+
+export async function getMemoryStats() {
+  return request<MemoryStats>('/memory/stats');
+}
+
+export async function getUserFacts(userId: string, type?: string) {
+  const params = new URLSearchParams({ userId });
+  if (type) params.set('type', type);
+  return request<{ facts: UserFact[] }>(`/memory/facts?${params}`);
+}
+
+export async function saveFact(userId: string, content: string, type?: string) {
+  return request<{ fact: UserFact }>('/memory/facts', {
+    method: 'POST',
+    body: JSON.stringify({ userId, content, type: type || 'general' }),
+  });
+}
+
+export async function deleteFact(factId: string) {
+  return request<{ success: boolean }>(`/memory/facts/${factId}`, { method: 'DELETE' });
+}
+
+export async function purgeUserFacts(userId: string) {
+  return request<{ success: boolean; deletedCount: number }>(`/memory/facts/user/${userId}`, { method: 'DELETE' });
+}
+
+export async function expireOldFacts() {
+  return request<{ success: boolean; expiredCount: number }>('/memory/expire', { method: 'POST' });
+}
+
+export async function exportFacts(userId?: string) {
+  const params = userId ? `?userId=${userId}` : '';
+  return request<any>(`/memory/export${params}`);
+}
+
+// --- Security ---
+export interface SecurityEvent {
+  id: number;
+  eventType: string;
+  userHandle: string | null;
+  details: Record<string, unknown>;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  createdAt: string;
+}
+
+export interface BudgetStatus {
+  dailyBudgetCents: number;
+  spentCents: number;
+  inputTokens: number;
+  outputTokens: number;
+  isExceeded: boolean;
+  percentUsed: number;
+}
+
+export interface SecurityConfig {
+  rateLimitPerMinute: number;
+  rateLimitGlobalPerHour: number;
+  dailyBudgetCents: number;
+  maxApiCallsPerMessage: number;
+  outputSanitization: boolean;
+}
+
+export async function getSecurityEvents(severity?: string, limit = 50, offset = 0) {
+  const params = new URLSearchParams();
+  if (severity && severity !== 'all') params.set('severity', severity);
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  return request<{ events: SecurityEvent[]; total: number }>(`/security/events?${params}`);
+}
+
+export async function getSecurityConfig() {
+  return request<SecurityConfig>('/security/config');
+}
+
+export async function getBudgetStatus() {
+  return request<BudgetStatus>('/security/budget');
+}
+
+export async function getBlockedUsers() {
+  return request<{ users: User[] }>('/security/blocked-users');
+}
+
+export async function blockUser(userId: string) {
+  return request<{ success: boolean }>(`/security/users/${userId}/block`, { method: 'POST' });
+}
+
+export async function unblockUser(userId: string) {
+  return request<{ success: boolean }>(`/security/users/${userId}/unblock`, { method: 'POST' });
+}
+
+// --- Tools ---
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  type: 'custom' | 'anthropic_server';
+  enabled: boolean;
+}
+
+export interface ToolExecution {
+  id: string;
+  toolName: string;
+  userId: string;
+  input: Record<string, unknown>;
+  output: string;
+  isError: boolean;
+  durationMs: number;
+  tokensUsed: number;
+  createdAt: string;
+}
+
+export interface Reminder {
+  id: string;
+  user_id: string;
+  chat_guid: string;
+  message: string;
+  due_at: string;
+  is_sent: number;
+  created_at: string;
+}
+
+export interface Trigger {
+  id: string;
+  user_id: string;
+  chat_guid: string;
+  name: string;
+  message: string;
+  schedule: string;
+  is_active: number;
+  last_fired_at: string | null;
+  created_at: string;
+}
+
+export async function getToolDefinitions() {
+  return request<{ tools: ToolDefinition[] }>('/tools/definitions');
+}
+
+export async function getToolExecutions(limit = 50) {
+  return request<{ executions: ToolExecution[] }>(`/tools/executions?limit=${limit}`);
+}
+
+export async function getReminders(status?: string) {
+  const params = status ? `?status=${status}` : '';
+  return request<{ reminders: Reminder[] }>(`/tools/reminders${params}`);
+}
+
+export async function deleteReminder(id: string) {
+  return request<{ success: boolean }>(`/tools/reminders/${id}`, { method: 'DELETE' });
+}
+
+export async function getTriggers() {
+  return request<{ triggers: Trigger[] }>('/tools/triggers');
+}
+
+export async function toggleTrigger(id: string) {
+  return request<{ success: boolean; isActive: boolean }>(`/tools/triggers/${id}/toggle`, { method: 'POST' });
+}
+
+export async function deleteTrigger(id: string) {
+  return request<{ success: boolean }>(`/tools/triggers/${id}`, { method: 'DELETE' });
 }
 
 // --- Settings API Key ---

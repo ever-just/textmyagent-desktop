@@ -10,18 +10,39 @@ import {
   ScrollText,
   BarChart3,
   Shield,
+  ShieldAlert,
+  Brain,
+  Wrench,
   Activity,
 } from 'lucide-react';
 import { useAgentStatus } from '@/lib/hooks';
 
-const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/messages', label: 'Messages', icon: MessageSquare },
-  { href: '/users', label: 'Users', icon: Users },
-  { href: '/usage', label: 'Usage', icon: BarChart3 },
-  { href: '/logs', label: 'Logs', icon: ScrollText },
-  { href: '/permissions', label: 'Permissions', icon: Shield },
-  { href: '/settings', label: 'Settings', icon: Settings },
+const NAV_GROUPS = [
+  {
+    label: 'Overview',
+    items: [
+      { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { href: '/messages', label: 'Messages', icon: MessageSquare },
+      { href: '/users', label: 'Users', icon: Users },
+      { href: '/usage', label: 'Usage', icon: BarChart3 },
+    ],
+  },
+  {
+    label: 'AI Agent',
+    items: [
+      { href: '/memory', label: 'Memory', icon: Brain },
+      { href: '/tools', label: 'Tools', icon: Wrench },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { href: '/logs', label: 'Logs', icon: ScrollText },
+      { href: '/permissions', label: 'Permissions', icon: Shield },
+      { href: '/security', label: 'Security', icon: ShieldAlert },
+      { href: '/settings', label: 'Settings', icon: Settings },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -63,31 +84,40 @@ export function Sidebar() {
       </div>
 
       {/* Navigation links */}
-      <nav className="flex-1 px-3 space-y-1">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-          const isActive = href === '/' ? pathname === '/' : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
-                isActive
-                  ? 'bg-[var(--color-brand)] text-white'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]'
-              }`}
-              aria-current={isActive ? 'page' : undefined}
-            >
-              <Icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
-              {label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 px-3 space-y-4 overflow-y-auto">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label}>
+            <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
+              {group.label}
+            </p>
+            <div className="space-y-0.5">
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const isActive = href === '/' ? pathname === '/' : pathname.startsWith(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors duration-150 ${
+                      isActive
+                        ? 'bg-[var(--color-brand)] text-white'
+                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-text)]'
+                    }`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <Icon className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* App version footer */}
       <div className="px-4 mt-auto">
         <p className="text-[11px] text-[var(--color-text-tertiary)] text-center">
-          TextMyAgent v1.6.0
+          TextMyAgent v2.0.0
         </p>
       </div>
     </aside>

@@ -6,7 +6,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { log } from '../logger';
-import { getSetting, setSetting } from '../database';
+import { getSetting, setSetting, getSettingInt } from '../database';
 
 const execAsync = promisify(exec);
 
@@ -40,13 +40,31 @@ export interface IChat {
 }
 
 export class IMessageServiceClass extends EventEmitter {
+  // iMessage tapback/reaction prefixes to filter out (Pre-Phase 0.6)
+  static readonly TAPBACK_PREFIXES = [
+    'Liked "',
+    'Loved "',
+    'Laughed at "',
+    'Emphasized "',
+    'Questioned "',
+    'Disliked "',
+    // Removal variants
+    'Removed a like from "',
+    'Removed a heart from "',
+    'Removed a laugh from "',
+    'Removed an emphasis from "',
+    'Removed a question mark from "',
+    'Removed a dislike from "',
+  ];
+
   private db: DatabaseType | null = null;
-  private pollInterval: NodeJS.Timeout | null = null;
+  private pollTimeout: NodeJS.Timeout | null = null;
   private lastMessageRowId: number = 0;
   private isRunning = false;
   private isPolling = false; // Guard against concurrent poll execution (fixes C2)
   private dbCheckInterval: NodeJS.Timeout | null = null;
   private processedMessageGuids: Set<string> = new Set(); // Track processed messages to avoid duplicates
+  private lastMessageTime: number = Date.now(); // Tracks last incoming message for adaptive polling
 
   constructor() {
     super();
@@ -93,7 +111,7 @@ export class IMessageServiceClass extends EventEmitter {
     }
   }
 
-  async startPolling(intervalMs = 2000): Promise<void> {
+  async startPolling(_intervalMs = 2000): Promise<void> {
     if (this.isRunning) return;
 
     const initialized = await this.initialize();
@@ -103,23 +121,47 @@ export class IMessageServiceClass extends EventEmitter {
     }
 
     this.isRunning = true;
-    log('info', 'Started iMessage polling');
+    this.lastMessageTime = Date.now();
+    log('info', 'Started adaptive iMessage polling');
     this.emit('connected');
 
-    this.pollInterval = setInterval(async () => {
-      await this.pollNewMessages();
-    }, intervalMs);
-
-    // Initial poll
+    // Initial poll, then start adaptive chain
     await this.pollNewMessages();
+    this.scheduleNextPoll();
+  }
+
+  /**
+   * Adaptive polling: choose interval based on time since last message.
+   * - Active  (< 2 min since last msg): fast interval
+   * - Idle    (2–10 min): medium interval
+   * - Sleep   (> 10 min): slow interval
+   */
+  private getAdaptiveInterval(): number {
+    const activeMs  = getSettingInt('polling.activeIntervalMs', 2000);
+    const idleMs    = getSettingInt('polling.idleIntervalMs', 5000);
+    const sleepMs   = getSettingInt('polling.sleepIntervalMs', 15000);
+
+    const elapsed = Date.now() - this.lastMessageTime;
+    if (elapsed < 2 * 60 * 1000) return activeMs;   // < 2 min
+    if (elapsed < 10 * 60 * 1000) return idleMs;     // 2–10 min
+    return sleepMs;                                    // > 10 min
+  }
+
+  private scheduleNextPoll(): void {
+    if (!this.isRunning) return;
+    const interval = this.getAdaptiveInterval();
+    this.pollTimeout = setTimeout(async () => {
+      await this.pollNewMessages();
+      this.scheduleNextPoll();
+    }, interval);
   }
 
   async stopPolling(): Promise<void> {
     this.isRunning = false;
     
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
     }
 
     if (this.db) {
@@ -173,6 +215,11 @@ export class IMessageServiceClass extends EventEmitter {
           messageText = this.extractTextFromAttributedBody(row.attributedBody);
         }
 
+        // Skip iMessage tapback/reaction messages (Pre-Phase 0.6)
+        if (messageText && IMessageServiceClass.TAPBACK_PREFIXES.some(p => messageText.startsWith(p))) {
+          continue;
+        }
+
         // Only process incoming messages with text that we haven't already processed
         if (row.is_from_me === 0 && messageText && row.chat_guid) {
           // Skip if we've already processed this message (prevents duplicates on restart)
@@ -202,6 +249,7 @@ export class IMessageServiceClass extends EventEmitter {
             preview: message.text.substring(0, 50),
           });
 
+          this.lastMessageTime = Date.now(); // Reset adaptive polling to active interval
           this.emit('message', message);
         }
       }

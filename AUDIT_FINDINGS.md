@@ -3,6 +3,25 @@
 **Date:** April 7, 2026
 **Scope:** Full codebase audit — security, functional, efficiency, quality, build
 
+## Resolution Status (v2.0.1)
+
+The following findings have been resolved as of v2.0.1:
+
+| ID | Finding | Resolution |
+|----|---------|------------|
+| E4 (reminders/triggers) | Schema mismatch between migrations and tools/services | ✅ Migration v8 adds missing columns + backfill. Redundant `CREATE TABLE` removed. |
+| B6 (partial) | Budget circuit breaker used hardcoded Haiku pricing | ✅ Per-model cost map reads configured model from settings |
+| A6 (partial) | PermissionService URL allowlist incomplete | ✅ Added `https://console.anthropic.com/` to match dashboard route |
+| — | Rate limiting not logged as security event | ✅ `logSecurityEvent()` called on rate limit |
+| — | RateLimiter never cleaned up | ✅ `cleanup()` wired every 5 min in `server.ts` |
+| — | Conversation history misattribution (isFromMe ≠ assistant) | ✅ Cross-references saved messages DB |
+| — | MemoryService facts never expired | ✅ `expireOldFacts()` runs every 24 hr |
+| — | web_fetch tool referenced in prompt but never implemented | ✅ Removed from prompt + default settings |
+| E5 (partial) | No tests | ✅ 90 tests (62 existing + 28 new audit fix tests) |
+| — | Tools page used inconsistent data fetching | ✅ Refactored to SWR hooks |
+| — | Dashboard used blocking `alert()` calls | ✅ Replaced with inline banners |
+| — | Contact names not resolved from Contacts.app | ✅ `node-mac-contacts` lookup with cache |
+
 ---
 
 ## CATEGORY A: SECURITY VULNERABILITIES

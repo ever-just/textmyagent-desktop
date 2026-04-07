@@ -2,8 +2,11 @@ import { EventEmitter } from 'events';
 import crypto from 'crypto';
 import { iMessageService, IMessage } from './iMessageService';
 import { claudeService, Message } from './ClaudeService';
-import { log } from '../logger';
-import { getDatabase } from '../database';
+import { log, logSecurityEvent } from '../logger';
+import { getDatabase, getSetting, getSettingInt, getSettingFloat } from '../database';
+import { rateLimiter } from './RateLimiter';
+import { messageFormatter } from './MessageFormatter';
+import { memoryService } from './MemoryService';
 
 interface ConversationContext {
   chatGuid: string;
@@ -23,6 +26,7 @@ export class AgentService extends EventEmitter {
   private chatLocks: Set<string> = new Set(); // per-chat concurrency lock (fixes C1)
   private chatQueues: Map<string, IMessage[]> = new Map(); // per-chat message queue
   private static MAX_CHAT_QUEUE_SIZE = 5;
+  private static MAX_API_CALLS_PER_MESSAGE = 6; // Phase 1, task 1.4: per-message cost cap
   private maxHistoryMessages = 20;
 
   constructor() {
@@ -110,6 +114,26 @@ export class AgentService extends EventEmitter {
       return;
     }
 
+    // Reject messages from blocked users (Phase 1, task 1.1)
+    try {
+      const db = getDatabase();
+      const blockedUser = db.prepare('SELECT is_blocked FROM users WHERE handle = ?').get(userHandle) as { is_blocked: number } | undefined;
+      if (blockedUser?.is_blocked) {
+        log('info', 'Ignoring message from blocked user', { handle: userHandle });
+        return;
+      }
+    } catch {
+      // If DB query fails, allow message through rather than silently dropping
+    }
+
+    // Rate limit check (Phase 1, task 1.2)
+    const rateCheck = rateLimiter.checkLimit(userHandle);
+    if (!rateCheck.allowed) {
+      log('warn', 'Message rate-limited', { handle: userHandle, reason: rateCheck.reason });
+      logSecurityEvent('rate_limit_exceeded', userHandle, { reason: rateCheck.reason }, 'medium');
+      return;
+    }
+
     // Prevent duplicate message processing
     if (this.processingQueue.has(message.guid)) {
       return;
@@ -151,13 +175,34 @@ export class AgentService extends EventEmitter {
         this.conversations.set(chatGuid, context);
 
         // Load recent history from iMessage
+        // Only attribute "isFromMe" messages as 'assistant' if they exist in our
+        // own messages DB — otherwise the user manually sent them and they should
+        // be excluded to avoid misattribution (fixes M2).
         const history = await iMessageService.getConversationHistory(chatGuid, 10);
+        const db = getDatabase();
+        const conversation = db.prepare(
+          'SELECT id FROM conversations WHERE chat_guid = ?'
+        ).get(chatGuid) as { id: string } | undefined;
+
+        const savedAssistantMessages = new Set<string>();
+        if (conversation) {
+          const rows = db.prepare(
+            'SELECT content FROM messages WHERE conversation_id = ? AND role = \'assistant\' ORDER BY created_at DESC LIMIT 20'
+          ).all(conversation.id) as { content: string }[];
+          for (const r of rows) savedAssistantMessages.add(r.content);
+        }
+
         for (const msg of history) {
           if (msg.guid !== message.guid) {
-            context.messages.push({
-              role: msg.isFromMe ? 'assistant' : 'user',
-              content: msg.text || '',
-            });
+            if (msg.isFromMe) {
+              // Only include if this was an agent-sent response
+              if (savedAssistantMessages.has(msg.text || '')) {
+                context.messages.push({ role: 'assistant', content: msg.text || '' });
+              }
+              // else: manually sent by Mac user — skip to avoid misattribution
+            } else {
+              context.messages.push({ role: 'user', content: msg.text || '' });
+            }
           }
         }
       }
@@ -174,42 +219,97 @@ export class AgentService extends EventEmitter {
         context.messages = context.messages.slice(-this.maxHistoryMessages);
       }
 
-      // Note: Typing indicators require Private API which we don't have
-      // Skipping typing indicator
+      // Budget circuit breaker (Phase 1, task 1.3)
+      if (this.isBudgetExceeded()) {
+        log('warn', 'Skipping response — daily budget exceeded', { chatGuid, userHandle });
+        return;
+      }
 
-      // Generate AI response
+      // Load user facts for prompt context (Phase 4, task 4.1)
+      let userFacts: import('../types').UserFact[] = [];
+      try {
+        userFacts = memoryService.getUserFacts(userHandle);
+        for (const f of userFacts) {
+          memoryService.touchFact(f.id);
+        }
+      } catch {
+        // Non-fatal — continue without facts
+      }
+
+      // Contact name resolution — normalize phone to last 10 digits for display (task 2.4)
+      const contactName = this.normalizeContactName(userHandle);
+
+      // Group chat detection (task 3.12) — group chatGuids contain multiple participants
+      const isGroupChat = chatGuid.includes(';chat');
+      const chatType: 'group' | 'individual' = isGroupChat ? 'group' : 'individual';
+
+      // Generate AI response (Phase 3: pass tool context + prompt context)
       const response = await claudeService.generateResponse(
         message.text,
-        context.messages.slice(0, -1) // Exclude the current message (it's passed separately)
+        context.messages.slice(0, -1), // Exclude the current message (it's passed separately)
+        undefined, // systemPrompt — use PromptBuilder default
+        { date: new Date().toLocaleString(), contactName, userFacts, chatType },
+        { userId: userHandle, chatGuid }
       );
 
       // Typing indicator skipped
 
       if (response && response.content) {
-        // Send the response
-        const sent = await iMessageService.sendMessage(chatGuid, response.content);
+        // Detect if user asked for links/URLs
+        const userAskedForLinks = /\b(link|url|website|source|http)\b/i.test(message.text);
 
-        if (sent) {
+        // Run MessageFormatter pipeline (Phase 2a, task 2.4)
+        const formatted = messageFormatter.format(response.content, {
+          allowUrls: userAskedForLinks,
+        });
+
+        if (formatted.wasSanitized) {
+          log('warn', 'Response was sanitized by output filter', { chatGuid });
+        }
+
+        // Send formatted chunks
+        let allSent = true;
+        const chunkDelayMs = getSettingFloat('agent.splitDelaySeconds', 1.5) * 1000;
+
+        for (let i = 0; i < formatted.chunks.length; i++) {
+          if (i > 0 && chunkDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+          }
+          const sent = await iMessageService.sendMessage(chatGuid, formatted.chunks[i]);
+          if (!sent) {
+            allSent = false;
+            log('error', 'Failed to send response chunk', { chunkIndex: i, totalChunks: formatted.chunks.length });
+            break;
+          }
+        }
+
+        if (allSent) {
+          const fullResponse = formatted.chunks.join('\n\n');
+
           // Add assistant response to context
           context.messages.push({
             role: 'assistant',
-            content: response.content,
+            content: fullResponse,
           });
 
           // Save to database
-          this.saveMessageToDb(chatGuid, userHandle, message.text, response.content);
+          this.saveMessageToDb(chatGuid, userHandle, message.text, fullResponse);
 
           log('info', 'Response sent', {
             to: userHandle,
-            preview: response.content.substring(0, 50),
+            preview: fullResponse.substring(0, 50),
             tokens: response.inputTokens + response.outputTokens,
+            chunks: formatted.chunks.length,
+            wasTruncated: formatted.wasTruncated,
+            originalLength: formatted.originalLength,
+            processedLength: formatted.processedLength,
           });
 
           this.emit('messageSent', {
             chatGuid,
             userHandle,
             userMessage: message.text,
-            assistantResponse: response.content,
+            assistantResponse: fullResponse,
           });
         } else {
           log('error', 'Failed to send response');
@@ -334,6 +434,121 @@ export class AgentService extends EventEmitter {
     } catch (error: any) {
       log('error', 'Failed to save message to database', { error: error.message, stack: error.stack });
     }
+  }
+
+  /**
+   * Budget circuit breaker (Phase 1, task 1.3).
+   * Checks today's total token usage against the daily budget.
+   * Returns true if budget is exceeded.
+   */
+  private isBudgetExceeded(): boolean {
+    try {
+      const dailyBudgetCents = getSettingInt('security.dailyBudgetCents', 0); // 0 = no limit
+      if (dailyBudgetCents <= 0) return false;
+
+      const db = getDatabase();
+      const today = new Date().toISOString().split('T')[0];
+      const row = db.prepare(
+        'SELECT SUM(input_tokens) as inputTokens, SUM(output_tokens) as outputTokens FROM api_usage WHERE date = ?'
+      ).get(today) as { inputTokens: number | null; outputTokens: number | null } | undefined;
+
+      if (!row || (!row.inputTokens && !row.outputTokens)) return false;
+
+      const inputTokens = row.inputTokens || 0;
+      const outputTokens = row.outputTokens || 0;
+
+      // Per-model cost calculation ($/1M tokens → cents/1M tokens)
+      const MODEL_COST: Record<string, { input: number; output: number }> = {
+        'claude-3-5-haiku-latest':  { input: 80,   output: 400  },
+        'claude-3-5-sonnet-latest': { input: 300,  output: 1500 },
+        'claude-sonnet-4-20250514': { input: 300,  output: 1500 },
+      };
+      const DEFAULT_COST = { input: 300, output: 1500 };
+
+      let model = 'claude-3-5-haiku-latest';
+      try {
+        const raw = getSetting('anthropic.model');
+        if (raw) model = JSON.parse(raw);
+      } catch { /* use default */ }
+
+      const cost = MODEL_COST[model] || DEFAULT_COST;
+      const costCents = (inputTokens / 1_000_000) * cost.input + (outputTokens / 1_000_000) * cost.output;
+
+      if (costCents >= dailyBudgetCents) {
+        log('warn', 'Daily budget exceeded', {
+          costCents: Math.round(costCents * 100) / 100,
+          dailyBudgetCents,
+          inputTokens,
+          outputTokens,
+        });
+        return true;
+      }
+
+      return false;
+    } catch (error: any) {
+      log('error', 'Budget check failed', { error: error.message });
+      return false; // Allow through on error rather than blocking
+    }
+  }
+
+  /**
+   * Normalize a phone handle to a more readable contact name (task 2.4).
+   * Strips country code prefixes, normalizes to last 10 digits for US numbers.
+   * If handle is an email or already a name, returns as-is.
+   */
+  private contactNameCache = new Map<string, string>();
+
+  private normalizeContactName(handle: string): string {
+    if (!handle) return 'Unknown';
+    // If it's an email address, return as-is
+    if (handle.includes('@')) return handle;
+
+    // Check cache first
+    if (this.contactNameCache.has(handle)) {
+      return this.contactNameCache.get(handle)!;
+    }
+
+    // Try to look up contact name via node-mac-contacts
+    try {
+      const macContacts = require('node-mac-contacts');
+      if (macContacts.getAuthStatus() === 'Authorized') {
+        const allContacts = macContacts.getAllContacts();
+        const digits = handle.replace(/\D/g, '');
+        const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+
+        for (const contact of allContacts) {
+          const phones: string[] = contact.phoneNumbers || [];
+          for (const phone of phones) {
+            const phoneDigits = phone.replace(/\D/g, '');
+            const phoneLast10 = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : phoneDigits;
+            if (last10.length >= 7 && phoneLast10 === last10) {
+              const name = [contact.firstName, contact.lastName].filter(Boolean).join(' ');
+              if (name) {
+                this.contactNameCache.set(handle, name);
+                return name;
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // node-mac-contacts not available or permission denied — fall through
+    }
+
+    // Fallback: format phone number
+    const digits = handle.replace(/\D/g, '');
+    if (digits.length === 0) return handle;
+    if (digits.length === 11 && digits.startsWith('1')) {
+      const formatted = `(${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.substring(7, 11)}`;
+      this.contactNameCache.set(handle, formatted);
+      return formatted;
+    }
+    if (digits.length === 10) {
+      const formatted = `(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6, 10)}`;
+      this.contactNameCache.set(handle, formatted);
+      return formatted;
+    }
+    return handle;
   }
 
   getStatus(): {

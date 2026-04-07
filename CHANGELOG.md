@@ -8,11 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Conversation summarization
-- User context/memory system
-- Scheduled reminders
-- Automation triggers
 - Multi-language support
+
+## [2.0.1] - 2026-04-07
+
+### Fixed
+- **[C1] Database schema mismatch** — Added migration v8 to align `reminders` and `triggers` table schemas with actual tool/service usage. Adds `chat_guid`, `due_at`, `is_sent` columns to reminders and `chat_guid`, `message`, `last_fired_at` columns to triggers, with automatic data back-fill from old columns. Removed redundant `CREATE TABLE IF NOT EXISTS` statements from `setReminder`, `createTrigger`, `ReminderService`, and `TriggerService`.
+- **[H1] Budget circuit breaker using wrong pricing** — `isBudgetExceeded()` now reads the configured model from settings and applies correct per-model pricing (Haiku: $0.80/$4.00, Sonnet: $3.00/$15.00 per MTok) instead of hardcoding Haiku rates for all models.
+- **[H2] Rate limiting not logged as security event** — Added `logSecurityEvent('rate_limit_exceeded', ...)` call when a message is rate-limited, so it appears in the Security dashboard.
+- **[H3] RateLimiter memory leak** — `rateLimiter.cleanup()` is now called every 5 minutes via `setInterval` in `server.ts`, and the interval is cleared on shutdown.
+- **[H4] URL allowlist inconsistency** — `PermissionService.openSystemSettings()` now includes `https://console.anthropic.com/` in its allowlist, matching the dashboard route.
+- **[M2] Conversation history misattribution** — `isFromMe` messages in iMessage history are no longer blindly mapped to `role: 'assistant'`. The agent now cross-references its own saved messages database; only messages it actually sent are attributed as assistant responses. Manually-sent messages from the Mac user are excluded.
+- **[M4] Old facts never expired** — `memoryService.expireOldFacts()` now runs once on startup and every 24 hours via `setInterval` in `server.ts`.
+- **[M6] Phantom web_fetch tool in prompt** — Removed the "Web Fetch" section from `PromptBuilder`'s `DEFAULT_TOOL_USAGE` and the `tools.webFetch` / `tools.webFetchMaxTokens` entries from default settings, since the tool was never implemented.
+- **[L1] Tools page inconsistent data fetching** — Refactored the Tools dashboard page to use SWR hooks (`useToolDefinitions`, `useToolExecutions`, `useReminders`, `useTriggers`) matching the pattern used by all other dashboard pages. Provides automatic background revalidation, caching, and retry.
+- **[L6] Blocking alert() dialogs in dashboard** — Replaced `alert()` calls in the Memory and Settings pages with inline status/error banners that auto-dismiss.
+- **[L7] Contact names not resolved** — `normalizeContactName()` now attempts real contact lookup via `node-mac-contacts` (with an in-memory cache) before falling back to phone number formatting.
+
+### Added
+- **Audit fix test suite** — 28 new tests in `AuditFixes.test.ts` covering all 11 fixes with source-level verification. Total test count: 90.
+- **SWR hooks for tools** — `useToolDefinitions()`, `useToolExecutions()`, `useReminders()`, `useTriggers()` in `dashboard/lib/hooks.ts`.
+
+### Technical
+- TypeScript strict mode passes with 0 errors (Electron + Dashboard)
+- 90 unit tests passing (62 existing + 28 new)
+- Dashboard Next.js build compiles all 12 pages successfully
 
 ## [1.7.0] - 2026-04-07
 

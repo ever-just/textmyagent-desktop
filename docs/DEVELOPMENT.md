@@ -56,15 +56,26 @@ textmyagent-desktop/
 │   ├── tsconfig.json        # TS config
 │   ├── backend/
 │   │   ├── server.ts        # Express server
-│   │   ├── database.ts      # SQLite + migrations
+│   │   ├── database.ts      # SQLite + migrations (v1–v8)
 │   │   ├── logger.ts        # Log buffer + SSE broadcast
 │   │   ├── routes/
 │   │   │   └── dashboard.ts # API endpoints
+│   │   ├── tools/           # AI tool implementations
+│   │   │   ├── setReminder.ts
+│   │   │   └── createTrigger.ts
 │   │   └── services/
 │   │       ├── AgentService.ts
 │   │       ├── iMessageService.ts
 │   │       ├── ClaudeService.ts
-│   │       └── PermissionService.ts
+│   │       ├── PermissionService.ts
+│   │       ├── ReminderService.ts
+│   │       ├── TriggerService.ts
+│   │       ├── MemoryService.ts
+│   │       ├── PromptBuilder.ts
+│   │       ├── ToolRegistry.ts
+│   │       ├── RateLimiter.ts
+│   │       ├── MessageFormatter.ts
+│   │       └── __tests__/   # Unit tests
 │   └── utils/
 │       ├── secure-storage.ts
 │       ├── auto-updater.ts
@@ -167,7 +178,7 @@ To add a new migration:
 const migrations: Migration[] = [
   // ... existing migrations
   {
-    version: 4,
+    version: 9,
     name: 'add_my_table',
     up: (db) => {
       db.exec(`
@@ -185,6 +196,30 @@ const migrations: Migration[] = [
 Migrations run automatically on app start.
 
 ## Testing
+
+### Unit Tests
+
+The project uses [Vitest](https://vitest.dev/) for unit testing.
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npx vitest
+
+# Run a specific test file
+npx vitest run electron/backend/services/__tests__/AuditFixes.test.ts
+```
+
+**Test files:**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `RateLimiter.test.ts` | 12 | Rate limiting, cleanup, global limits |
+| `PromptBuilder.test.ts` | 22 | Prompt sections, tool usage, formatting |
+| `MessageFormatter.test.ts` | 28 | Message splitting, truncation, multipart |
+| `AuditFixes.test.ts` | 28 | Schema dedup, budget pricing, security events, cleanup wiring, URL allowlists, history attribution, fact expiration, web_fetch removal, SWR hooks, alert replacement, contact lookup |
 
 ### Manual Testing
 

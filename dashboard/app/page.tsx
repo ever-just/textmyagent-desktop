@@ -17,6 +17,8 @@ import {
   Zap,
   Database,
   Cpu,
+  Coins,
+  Brain,
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -152,7 +154,7 @@ export default function DashboardPage() {
       </Card>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <StatCard
           label="Active Conversations"
           value={agent.activeConversations}
@@ -171,12 +173,44 @@ export default function DashboardPage() {
           subtitle={isConnected ? 'Polling active' : 'Not polling'}
           icon={<MessageSquare className="w-5 h-5" />}
         />
-        <StatCard
-          label="Database"
-          value={status?.database?.status === 'online' ? 'Online' : 'Offline'}
-          subtitle="SQLite"
-          icon={<Database className="w-5 h-5" />}
-        />
+      </div>
+
+      {/* Budget + Memory Widgets */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <Card>
+          <div className="flex items-center gap-3 mb-3">
+            <Coins className="w-5 h-5 text-amber-500" aria-hidden="true" />
+            <h3 className="text-[13px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">Daily Budget</h3>
+          </div>
+          {(() => {
+            const budgetCents = config?.settings?.['security.dailyBudgetCents'] || 0;
+            if (!budgetCents || budgetCents <= 0) {
+              return <p className="text-[13px] text-[var(--color-text-secondary)]">No daily budget limit set</p>;
+            }
+            const budgetDollars = budgetCents / 100;
+            return (
+              <div>
+                <p className="text-xl font-semibold">${budgetDollars.toFixed(2)} <span className="text-[13px] font-normal text-[var(--color-text-secondary)]">/ day</span></p>
+                <p className="text-[12px] text-[var(--color-text-tertiary)] mt-1">
+                  Agent will stop responding when budget is exceeded
+                </p>
+              </div>
+            );
+          })()}
+        </Card>
+        <Card>
+          <div className="flex items-center gap-3 mb-3">
+            <Brain className="w-5 h-5 text-purple-500" aria-hidden="true" />
+            <h3 className="text-[13px] font-semibold text-[var(--color-text-secondary)] uppercase tracking-wide">Memory</h3>
+          </div>
+          <p className="text-[13px] text-[var(--color-text-secondary)]">
+            {config?.settings?.['memory.maxFactsPerUser'] || 50} facts per user limit
+            {config?.settings?.['memory.factTTLDays'] ? ` · ${config.settings['memory.factTTLDays']}d TTL` : ''}
+          </p>
+          <p className="text-[12px] text-[var(--color-text-tertiary)] mt-1">
+            {config?.settings?.['memory.enableSummarization'] ? 'Summarization enabled' : 'Summarization disabled'}
+          </p>
+        </Card>
       </div>
 
       {/* System Info */}

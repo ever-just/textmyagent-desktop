@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import type { SecuritySeverity } from './types';
 
 // In-memory log buffer (extracted to break circular dependency — fixes E1)
 export interface LogEntry {
@@ -80,5 +81,38 @@ export function log(
         logSubscribers.delete(client);
       }
     });
+  }
+}
+
+/**
+ * Log a security event to both in-memory buffer (SSE) and persistent security_events table.
+ * Phase 1, task 1.8: Dual-write security event logger.
+ */
+export function logSecurityEvent(
+  eventType: string,
+  userHandle: string | null,
+  details: Record<string, unknown> = {},
+  severity: SecuritySeverity = 'low'
+): void {
+  // Write to in-memory log buffer + SSE
+  const levelMap: Record<SecuritySeverity, 'error' | 'warn' | 'info'> = {
+    critical: 'error',
+    high: 'error',
+    medium: 'warn',
+    low: 'info',
+  };
+  log(levelMap[severity], `[SECURITY] ${eventType}`, { userHandle, severity, ...details });
+
+  // Persist to security_events table
+  try {
+    // Lazy import to avoid circular dependency (database imports logger)
+    const { getDatabase } = require('./database');
+    const db = getDatabase();
+    db.prepare(
+      `INSERT INTO security_events (event_type, user_handle, details, severity) VALUES (?, ?, ?, ?)`
+    ).run(eventType, userHandle, JSON.stringify(details), severity);
+  } catch (error) {
+    // Don't let persistence failure break the calling code
+    console.error('[Security] Failed to persist security event:', error);
   }
 }

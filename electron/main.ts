@@ -9,7 +9,8 @@ import {
 } from 'electron';
 import path from 'path';
 import { startBackendServer, stopBackendServer } from './backend/server';
-import { initializeDatabase, closeDatabase } from './backend/database';
+import { initializeDatabase, closeDatabase, seedDefaultSettings } from './backend/database';
+import { registerAllTools } from './backend/tools';
 import { createTray, destroyTray } from './utils/tray';
 import { setupAutoUpdater } from './utils/auto-updater';
 
@@ -144,6 +145,8 @@ app.whenReady().then(async () => {
 
     // Initialize database
     initializeDatabase();
+    seedDefaultSettings();
+    registerAllTools();
 
     // Start backend server
     backendPort = await startBackendServer({ port: 3001 });
