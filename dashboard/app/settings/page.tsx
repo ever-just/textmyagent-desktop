@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useConfig } from '@/lib/hooks';
-import { updateConfig, saveApiKey, testAnthropic } from '@/lib/api';
+import { updateConfig, getModelStatus, startModelDownload, testModel } from '@/lib/api';
 import { Card } from '@/components/Card';
 import { Button } from '@/components/Button';
 import { PageHeader } from '@/components/PageHeader';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { Save, Key, TestTube, CheckCircle2, XCircle, Info, User, Shield, Wrench, Brain, Clock, Users, Plus, X } from 'lucide-react';
+import { Save, CheckCircle2, XCircle, Info, User, Shield, Wrench, Brain, Clock, Users, Plus, X, Download, Cpu, Power, Loader2, RefreshCw } from 'lucide-react';
 
 type SettingsTab = 'general' | 'persona' | 'tools' | 'memory' | 'security';
 
@@ -16,12 +16,24 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // General form state
-  const [model, setModel] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(1024);
-  const [contextWindow, setContextWindow] = useState(100000);
-  const [apiKey, setApiKey] = useState('');
+  const [contextSize, setContextSize] = useState(8192);
+  const [gpuLayers, setGpuLayers] = useState(-1);
   const [maxResponseChars, setMaxResponseChars] = useState(500);
+
+  // Model management state
+  const [modelAction, setModelAction] = useState<'idle' | 'loading' | 'downloading' | 'testing'>('idle');
+  const [modelActionMsg, setModelActionMsg] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup download polling on unmount
+  useEffect(() => {
+    return () => {
+      if (downloadPollRef.current) clearInterval(downloadPollRef.current);
+    };
+  }, []);
   const [multiMessageSplit, setMultiMessageSplit] = useState(true);
   const [splitDelay, setSplitDelay] = useState(1.5);
 
@@ -70,19 +82,15 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
-  const [apiKeySaving, setApiKeySaving] = useState(false);
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (config) {
-      setModel(config.anthropic.model);
-      setTemperature(config.anthropic.temperature);
-      setMaxTokens(config.anthropic.responseMaxTokens);
-      setContextWindow(config.anthropic.contextWindowTokens);
+      setTemperature(config.model.temperature);
+      setMaxTokens(config.model.responseMaxTokens);
+      setContextSize(config.model.contextSize);
       // Load extended settings from config.settings if available
       const s = config.settings || {};
+      setGpuLayers(s['model.gpuLayers'] ?? -1);
       setMaxResponseChars(s['agent.maxResponseChars'] ?? 500);
       setMultiMessageSplit(s['agent.multiMessageSplit'] ?? true);
       setSplitDelay(s['agent.splitDelaySeconds'] ?? 1.5);
@@ -123,11 +131,11 @@ export default function SettingsPage() {
     setSaved(false);
     try {
       const updates: Record<string, any> = {
-        // General
-        'anthropic.model': model,
-        'anthropic.temperature': temperature,
-        'anthropic.responseMaxTokens': maxTokens,
-        'anthropic.contextWindowTokens': contextWindow,
+        // General / Model
+        'model.temperature': temperature,
+        'model.responseMaxTokens': maxTokens,
+        'model.contextSize': contextSize,
+        'model.gpuLayers': gpuLayers,
         'agent.maxResponseChars': maxResponseChars,
         'agent.multiMessageSplit': multiMessageSplit,
         'agent.splitDelaySeconds': splitDelay,
@@ -176,34 +184,6 @@ export default function SettingsPage() {
       setTimeout(() => setSaveError(null), 5000);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleSaveApiKey = async () => {
-    if (!apiKey.trim()) return;
-    setApiKeySaving(true);
-    setApiKeyError(null);
-    try {
-      await saveApiKey(apiKey.trim());
-      setApiKey('');
-      await mutate();
-    } catch (err: any) {
-      setApiKeyError(err.message);
-    } finally {
-      setApiKeySaving(false);
-    }
-  };
-
-  const handleTestApi = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const result = await testAnthropic(apiKey.trim() || undefined);
-      setTestResult(result);
-    } catch (err: any) {
-      setTestResult({ success: false, error: err.message });
-    } finally {
-      setTesting(false);
     }
   };
 
@@ -267,67 +247,162 @@ export default function SettingsPage() {
       {/* GENERAL TAB */}
       {activeTab === 'general' && (
         <>
-          {/* API Key Section */}
+          {/* Model Management Card */}
           <Card className="mb-6">
             <h2 className="text-[14px] font-semibold mb-4 flex items-center gap-2">
-              <Key className="w-4 h-4" aria-hidden="true" />
-              Anthropic API Key
-            </h2>
-            <p className="text-[12px] text-[var(--color-text-secondary)] mb-3">
-              Your API key is stored securely in the macOS Keychain. {config.anthropic.hasApiKey ? 'A key is currently configured.' : 'No key is configured yet.'}
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label htmlFor="api-key" className={labelCls}>API Key</label>
-                <input
-                  id="api-key"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={config.anthropic.hasApiKey ? '••••••••  (already configured)' : 'sk-ant-...'}
-                  className={inputCls + ' font-mono'}
-                  autoComplete="off"
-                />
-                <p className={helpCls}>Get your API key from console.anthropic.com</p>
-              </div>
-              {apiKeyError && <p className="text-[12px] text-red-600 dark:text-red-400" role="alert">{apiKeyError}</p>}
-              {testResult && (
-                <div className={`flex items-center gap-2 text-[12px] p-2 rounded-lg ${testResult.success ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400' : 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400'}`} role="alert">
-                  {testResult.success ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                  {testResult.success ? 'API key is valid and working' : testResult.error || 'API key test failed'}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" icon={<TestTube className="w-3.5 h-3.5" />} loading={testing} onClick={handleTestApi}>Test</Button>
-                <Button variant="primary" size="sm" icon={<Save className="w-3.5 h-3.5" />} loading={apiKeySaving} onClick={handleSaveApiKey} disabled={!apiKey.trim()}>Save Key</Button>
-              </div>
-            </div>
-          </Card>
-
-          {/* Model Configuration */}
-          <Card className="mb-6">
-            <h2 className="text-[14px] font-semibold mb-4 flex items-center gap-2">
-              <Info className="w-4 h-4" aria-hidden="true" />
+              <Cpu className="w-4 h-4" aria-hidden="true" />
               AI Model
             </h2>
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="model" className={labelCls}>Model</label>
-                <select id="model" value={model} onChange={(e) => setModel(e.target.value)} className={inputCls}>
-                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Fast &amp; Cheap)</option>
-                  <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
-                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Latest)</option>
-                  <option value="claude-opus-4-6">Claude Opus 4.6 (Most Intelligent)</option>
-                </select>
+
+            {/* Model info + status */}
+            <div className="flex items-start gap-4 p-3 rounded-lg bg-[var(--color-bg-secondary)] mb-4">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center flex-shrink-0">
+                <Cpu className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13px] font-semibold">Gemma 4 E4B</p>
+                <p className="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">Q4_K_M quantization • Apache 2.0 • ~5 GB on disk</p>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded-full ${
+                    config.model.isLoaded ? 'bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400'
+                    : config.model.isDownloaded ? 'bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400'
+                    : 'bg-red-100 dark:bg-red-950/30 text-red-700 dark:text-red-400'
+                  }`}>
+                    {config.model.isLoaded ? '● Loaded into memory' : config.model.isDownloaded ? '● Downloaded — not loaded' : '● Not downloaded'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Model action feedback */}
+            {modelActionMsg && (
+              <div className={`flex items-center gap-2 text-[12px] p-2.5 rounded-lg mb-4 border ${
+                modelActionMsg.startsWith('✓')
+                  ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50'
+                  : modelActionMsg.startsWith('✗')
+                    ? 'bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-900/50'
+                    : 'bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-900/50'
+              }`}>
+                {modelAction !== 'idle' && <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />}
+                {modelActionMsg}
+              </div>
+            )}
+
+            {/* Download progress */}
+            {modelAction === 'downloading' && (
+              <div className="mb-4">
+                <div className="flex justify-between text-[11px] text-[var(--color-text-secondary)] mb-1">
+                  <span>Downloading…</span>
+                  <span className="font-semibold tabular-nums">{downloadProgress}%</span>
+                </div>
+                <div className="w-full h-2 bg-[var(--color-bg-tertiary)] rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-[var(--color-brand)] to-blue-500 rounded-full transition-all duration-500" style={{ width: `${downloadProgress}%` }} />
+                </div>
+              </div>
+            )}
+
+            {/* Model action buttons */}
+            <div className="flex flex-wrap gap-2 mb-5">
+              {!config.model.isDownloaded && modelAction !== 'downloading' && (
+                <Button variant="primary" size="sm" icon={<Download className="w-3.5 h-3.5" />}
+                  onClick={async () => {
+                    setModelAction('downloading');
+                    setModelActionMsg('Downloading model…');
+                    setDownloadProgress(0);
+                    try {
+                      await startModelDownload();
+                      if (downloadPollRef.current) clearInterval(downloadPollRef.current);
+                      downloadPollRef.current = setInterval(async () => {
+                        try {
+                          const st = await getModelStatus();
+                          setDownloadProgress(st.downloadProgress ?? 0);
+                          if (st.isDownloaded) {
+                            clearInterval(downloadPollRef.current!);
+                            downloadPollRef.current = null;
+                            setModelAction('idle');
+                            setModelActionMsg('✓ Model downloaded successfully');
+                            await mutate();
+                          }
+                          if (st.status === 'error') {
+                            clearInterval(downloadPollRef.current!);
+                            downloadPollRef.current = null;
+                            setModelAction('idle');
+                            setModelActionMsg('✗ Download failed');
+                          }
+                        } catch { clearInterval(downloadPollRef.current!); downloadPollRef.current = null; setModelAction('idle'); setModelActionMsg('✗ Lost connection'); }
+                      }, 1500);
+                    } catch (err: any) { setModelAction('idle'); setModelActionMsg(`✗ ${err.message}`); }
+                  }}
+                >Download Model</Button>
+              )}
+              {config.model.isDownloaded && !config.model.isLoaded && (
+                <Button variant="primary" size="sm" icon={<Power className="w-3.5 h-3.5" />}
+                  loading={modelAction === 'loading'}
+                  onClick={async () => {
+                    setModelAction('loading');
+                    setModelActionMsg('Loading model into memory…');
+                    try {
+                      const r = await testModel();
+                      setModelAction('idle');
+                      setModelActionMsg(r.success ? '✓ Model loaded successfully' : `✗ ${r.error}`);
+                      await mutate();
+                    } catch (err: any) { setModelAction('idle'); setModelActionMsg(`✗ ${err.message}`); }
+                  }}
+                >Load Model</Button>
+              )}
+              {config.model.isLoaded && (
+                <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-emerald-600 dark:text-emerald-400 px-2 py-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Model active
+                </span>
+              )}
+              {config.model.isDownloaded && (
+                <Button variant="ghost" size="sm" icon={<RefreshCw className="w-3.5 h-3.5" />}
+                  onClick={async () => {
+                    setModelAction('downloading');
+                    setModelActionMsg('Re-downloading model…');
+                    setDownloadProgress(0);
+                    try {
+                      await startModelDownload();
+                      if (downloadPollRef.current) clearInterval(downloadPollRef.current);
+                      downloadPollRef.current = setInterval(async () => {
+                        try {
+                          const st = await getModelStatus();
+                          setDownloadProgress(st.downloadProgress ?? 0);
+                          if (st.isDownloaded) {
+                            clearInterval(downloadPollRef.current!);
+                            downloadPollRef.current = null;
+                            setModelAction('idle');
+                            setModelActionMsg('✓ Model re-downloaded');
+                            await mutate();
+                          }
+                        } catch { clearInterval(downloadPollRef.current!); downloadPollRef.current = null; setModelAction('idle'); setModelActionMsg('✗ Re-download failed'); }
+                      }, 1500);
+                    } catch (err: any) { setModelAction('idle'); setModelActionMsg(`✗ ${err.message}`); }
+                  }}
+                >Re-download</Button>
+              )}
+            </div>
+
+            <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
               <div>
                 <label htmlFor="temperature" className={labelCls}>Temperature: {temperature}</label>
                 <input id="temperature" type="range" min="0" max="1" step="0.1" value={temperature} onChange={(e) => setTemperature(parseFloat(e.target.value))} className="w-full accent-[var(--color-brand)]" />
-                <p className={helpCls}>Lower = focused. Higher = creative.</p>
+                <p className={helpCls}>Lower = focused and deterministic. Higher = creative and varied.</p>
               </div>
               <div>
                 <label htmlFor="max-tokens" className={labelCls}>Max Response Tokens</label>
                 <input id="max-tokens" type="number" min={100} max={8192} value={maxTokens} onChange={(e) => setMaxTokens(parseInt(e.target.value) || 1024)} className={inputCls + ' font-mono'} />
+                <p className={helpCls}>Maximum number of tokens the model can generate per response.</p>
+              </div>
+              <div>
+                <label htmlFor="context-size" className={labelCls}>Context Window Size</label>
+                <input id="context-size" type="number" min={2048} max={32768} value={contextSize} onChange={(e) => setContextSize(parseInt(e.target.value) || 8192)} className={inputCls + ' font-mono'} />
+                <p className={helpCls}>Larger context uses more RAM. 8192 recommended for 8 GB systems, 16384 for 16 GB+. Requires model reload.</p>
+              </div>
+              <div>
+                <label htmlFor="gpu-layers" className={labelCls}>GPU Layers</label>
+                <input id="gpu-layers" type="number" min={-1} max={999} value={gpuLayers} onChange={(e) => setGpuLayers(parseInt(e.target.value))} className={inputCls + ' font-mono'} />
+                <p className={helpCls}>Number of layers offloaded to GPU. -1 = auto (use all available GPU), 0 = CPU only. Requires model reload.</p>
               </div>
             </div>
           </Card>
@@ -529,17 +604,7 @@ export default function SettingsPage() {
             {toolsEnabled && (
               <>
                 <div className="border-t border-[var(--color-border)] pt-3 mt-3">
-                  <p className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-2">Anthropic Server Tools</p>
-                  <ToggleRow label="Web Search" checked={webSearch} onChange={setWebSearch} />
-                  {webSearch && (
-                    <div className="ml-6 mt-1">
-                      <label className={labelCls}>Max uses per message</label>
-                      <input type="number" min={1} max={10} value={webSearchMaxUses} onChange={(e) => setWebSearchMaxUses(parseInt(e.target.value) || 3)} className={inputCls + ' font-mono w-24'} />
-                    </div>
-                  )}
-                </div>
-                <div className="border-t border-[var(--color-border)] pt-3">
-                  <p className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-2">Custom Tools</p>
+                  <p className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-2">Local Tools</p>
                   <ToggleRow label="Save User Fact" checked={saveUserFact} onChange={setSaveUserFact} />
                   <ToggleRow label="Get User Facts" checked={getUserFacts} onChange={setGetUserFacts} />
                   <ToggleRow label="Search History" checked={searchHistory} onChange={setSearchHistory} />
@@ -596,14 +661,14 @@ export default function SettingsPage() {
               <input type="number" min={10} max={10000} value={rateLimitGlobalPerHour} onChange={(e) => setRateLimitGlobalPerHour(parseInt(e.target.value) || 200)} className={inputCls + ' font-mono'} />
             </div>
             <div>
-              <label className={labelCls}>Daily Budget (cents, 0 = unlimited)</label>
-              <input type="number" min={0} max={100000} value={dailyBudgetCents} onChange={(e) => setDailyBudgetCents(parseInt(e.target.value) || 0)} className={inputCls + ' font-mono'} />
-              <p className={helpCls}>{dailyBudgetCents > 0 ? `$${(dailyBudgetCents / 100).toFixed(2)}/day` : 'No daily limit'}</p>
+              <label className={labelCls}>Daily Token Budget (0 = unlimited)</label>
+              <input type="number" min={0} max={10000000} value={dailyBudgetCents} onChange={(e) => setDailyBudgetCents(parseInt(e.target.value) || 0)} className={inputCls + ' font-mono'} />
+              <p className={helpCls}>{dailyBudgetCents > 0 ? `${dailyBudgetCents.toLocaleString()} tokens/day limit` : 'No daily limit — local inference has no cost'}</p>
             </div>
             <div>
-              <label className={labelCls}>Max API Calls Per Message</label>
+              <label className={labelCls}>Max Tool Loops Per Message</label>
               <input type="number" min={1} max={20} value={maxApiCallsPerMessage} onChange={(e) => setMaxApiCallsPerMessage(parseInt(e.target.value) || 6)} className={inputCls + ' font-mono'} />
-              <p className={helpCls}>Limits the tool-calling loop to prevent runaway costs.</p>
+              <p className={helpCls}>Limits the agentic tool-calling loop per user message to prevent runaway inference.</p>
             </div>
             <ToggleRow label="Output sanitization (PII/prompt leak detection)" checked={outputSanitization} onChange={setOutputSanitization} />
           </div>

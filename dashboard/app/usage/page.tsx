@@ -14,30 +14,16 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-// Per-million-token pricing by model
-const MODEL_PRICING: Record<string, { input: number; output: number; label: string }> = {
-  'claude-haiku-4-5-20251001':  { input: 0.80,  output: 4.00,  label: 'Haiku 4.5' },
-  'claude-sonnet-4-5-20250929': { input: 3.00,  output: 15.00, label: 'Sonnet 4.5' },
-  'claude-sonnet-4-20250514':   { input: 3.00,  output: 15.00, label: 'Sonnet 4' },
-  'claude-sonnet-4-6':          { input: 3.00,  output: 15.00, label: 'Sonnet 4.6' },
-  'claude-opus-4-6':            { input: 15.00, output: 75.00, label: 'Opus 4.6' },
-};
-const DEFAULT_PRICING = { input: 3.00, output: 15.00, label: 'default' };
-
-function estimateCost(inputTokens: number, outputTokens: number, model?: string): string {
-  const pricing = (model && MODEL_PRICING[model]) || DEFAULT_PRICING;
-  const inputCost = (inputTokens / 1_000_000) * pricing.input;
-  const outputCost = (outputTokens / 1_000_000) * pricing.output;
-  const total = inputCost + outputCost;
-  if (total < 0.01) return '< $0.01';
-  return `$${total.toFixed(2)}`;
+// Local model — no API cost
+function estimateCost(_inputTokens: number, _outputTokens: number, _model?: string): string {
+  return '$0.00 (local)';
 }
 
 export default function UsagePage() {
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
   const { data, error, isLoading } = useUsage(period);
   const { data: config } = useConfig();
-  const currentModel = config?.anthropic?.model;
+  const currentModel = config?.model?.name || 'Gemma 4 E4B';
 
   return (
     <div className="p-6">
@@ -94,7 +80,7 @@ export default function UsagePage() {
             <StatCard
               label="Estimated Cost"
               value={estimateCost(data.totals.inputTokens, data.totals.outputTokens, currentModel)}
-              subtitle={`Based on ${(currentModel && MODEL_PRICING[currentModel]?.label) || 'default'} pricing`}
+              subtitle="Local inference — no API cost"
               icon={<Coins className="w-5 h-5" />}
             />
             <StatCard

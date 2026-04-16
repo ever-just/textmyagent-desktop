@@ -1,14 +1,11 @@
 // Shared TypeScript interfaces used across backend services
 // Pre-Phase 0.4: All subsequent phases depend on these types
 
-// --- Claude / AI Response ---
+// --- Local LLM / AI Response ---
 
 export interface GenerateResult {
   text: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
+  tokensUsed: number;
   stopReason: string;
   toolCalls: ToolCall[];
 }
@@ -18,13 +15,9 @@ export interface GenerateResult {
 export interface ToolDefinition {
   name: string;
   description: string;
-  type: 'custom' | 'anthropic_server';
+  type: 'custom';
   enabled: boolean;
   inputSchema?: Record<string, unknown>;
-  // Anthropic server-side tool fields
-  serverToolType?: string; // e.g. 'web_search_20250305'
-  maxUses?: number;
-  maxContentTokens?: number;
 }
 
 export interface ToolCall {
@@ -151,7 +144,7 @@ export interface Trigger {
 export interface PromptSection {
   tag: string; // e.g. 'IDENTITY', 'PERSONA', 'SAFETY'
   content: string;
-  cacheable: boolean;
+  cacheable?: boolean;
 }
 
 export interface PromptContext {
@@ -172,8 +165,6 @@ export interface ApiUsageRecord {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
   requestCount: number;
   model: string;
   createdAt: string;

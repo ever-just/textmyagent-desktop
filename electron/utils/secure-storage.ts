@@ -94,24 +94,19 @@ export function hasSecureValue(key: string): boolean {
 
 // Convenience functions
 export const SecureStorage = {
-  getAnthropicApiKey: () => getSecureValue('ANTHROPIC_API_KEY'),
-  setAnthropicApiKey: (key: string) => {
-    if (!key || typeof key !== 'string' || key.trim().length === 0) {
-      throw new Error('API key cannot be empty');
+  // Local model config
+  getModelPath: () => getSecureValue('LOCAL_MODEL_PATH'),
+  setModelPath: (modelPath: string) => {
+    if (!modelPath || typeof modelPath !== 'string' || modelPath.trim().length === 0) {
+      throw new Error('Model path cannot be empty');
     }
-    if (!key.startsWith('sk-ant-')) {
-      throw new Error('Invalid API key format');
-    }
-    if (key.length > 256) {
-      throw new Error('API key too long');
-    }
-    setSecureValue('ANTHROPIC_API_KEY', key.trim());
+    setSecureValue('LOCAL_MODEL_PATH', modelPath.trim());
   },
-  hasAnthropicKey: () => hasSecureValue('ANTHROPIC_API_KEY'),
+  hasModelPath: () => hasSecureValue('LOCAL_MODEL_PATH'),
 
-  // Check if API key is configured (iMessage access is checked separately via iMessageService)
+  // Check if local model is configured (iMessage access is checked separately via iMessageService)
   isConfigured: () => {
-    return hasSecureValue('ANTHROPIC_API_KEY');
+    return hasSecureValue('LOCAL_MODEL_PATH');
   },
 
   clearAll: () => {
@@ -130,11 +125,9 @@ export function setupSecureStorageIPC(): void {
   ipcRegistered = true;
 
   ipcMain.handle('secure-storage:get', (_event, key: string) => {
-    // Don't expose raw API keys to renderer
-    // Instead, return whether they're configured
     switch (key) {
-      case 'ANTHROPIC_API_KEY':
-        return SecureStorage.getAnthropicApiKey() ? '••••••••' : null;
+      case 'LOCAL_MODEL_PATH':
+        return SecureStorage.getModelPath();
       default:
         return null;
     }
@@ -142,9 +135,9 @@ export function setupSecureStorageIPC(): void {
 
   ipcMain.handle('secure-storage:set', (_event, key: string, value: string) => {
     switch (key) {
-      case 'ANTHROPIC_API_KEY':
+      case 'LOCAL_MODEL_PATH':
         try {
-          SecureStorage.setAnthropicApiKey(value);
+          SecureStorage.setModelPath(value);
           return true;
         } catch {
           return false;

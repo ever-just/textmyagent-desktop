@@ -17,6 +17,10 @@ asarUnpack:
   - "**/*.node"
   - "**/better-sqlite3/**"
   - "**/node-mac-contacts/**"
+  - "**/node-llama-cpp/**"
+  - "**/*.metal"
+  - "**/*.so"
+  - "**/*.dylib"
 
 afterSign: notarize.js
 

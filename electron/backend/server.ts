@@ -9,6 +9,7 @@ import securityRoutes from './routes/security';
 import memoryRoutes from './routes/memory';
 import toolsRoutes from './routes/tools';
 import { setupSecureStorageIPC } from '../utils/secure-storage';
+import { localLLMService } from './services/LocalLLMService';
 import { agentService } from './services/AgentService';
 import { reminderService } from './services/ReminderService';
 import { triggerService } from './services/TriggerService';

@@ -147,27 +147,6 @@ export default function PermissionsPage() {
         ))}
       </div>
 
-      {/* API Keys section */}
-      {data.apiKeys && data.apiKeys.length > 0 && (
-        <>
-          <h2 className="text-[14px] font-semibold mt-8 mb-3">API Keys</h2>
-          <div className="space-y-3">
-            {data.apiKeys.map((key) => (
-              <Card key={key.id} padding="md">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[13px] font-semibold">{key.name}</p>
-                    {key.masked && (
-                      <p className="text-[12px] text-[var(--color-text-tertiary)] font-mono mt-0.5">{key.masked}</p>
-                    )}
-                  </div>
-                  <StatusBadge status={key.configured ? 'granted' : 'denied'} label={key.configured ? 'Configured' : 'Not set'} />
-                </div>
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
     </div>
   );
 }

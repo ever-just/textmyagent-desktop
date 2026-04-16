@@ -1,0 +1,14 @@
+{
+  "name": "gemma4-poc",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Proof of concept: Gemma 4 E4B local inference with multi-turn chat and tool calling via node-llama-cpp",
+  "scripts": {
+    "test": "node test-chat.mjs",
+    "test:tools": "node test-tools.mjs",
+    "download": "node download-model.mjs"
+  },
+  "dependencies": {
+    "node-llama-cpp": "^3.18.0"
+  }
+}

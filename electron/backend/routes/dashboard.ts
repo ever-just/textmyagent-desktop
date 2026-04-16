@@ -1,10 +1,10 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { getDatabase, getSetting, setSetting } from '../database';
+import { getDatabase, getSetting, setSetting, getSettingValue } from '../database';
 import { SecureStorage } from '../../utils/secure-storage';
 import { agentService } from '../services/AgentService';
 import { iMessageService } from '../services/iMessageService';
-import { claudeService } from '../services/ClaudeService';
+import { localLLMService } from '../services/LocalLLMService';
 import { promptBuilder } from '../services/PromptBuilder';
 import { log, logBuffer, logSubscribers } from '../logger';
 export type { LogEntry } from '../logger';
@@ -51,7 +51,7 @@ router.get('/status', async (_req: Request, res: Response) => {
         configured: imessageStatus.hasAccess,
         error: imessageStatus.error,
       },
-      configured: SecureStorage.hasAnthropicKey() && imessageStatus.hasAccess,
+      configured: SecureStorage.hasModelPath() && imessageStatus.hasAccess,
     });
   } catch (error) {
     log('error', 'Status check failed', { error: String(error) });
@@ -63,30 +63,18 @@ router.get('/status', async (_req: Request, res: Response) => {
 router.get('/config', async (_req: Request, res: Response) => {
   try {
     const db = getDatabase();
-
-    // Get settings from SQLite
-    const getSettingValue = (key: string, defaultValue: any) => {
-      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-        | { value: string }
-        | undefined;
-      if (!row) return defaultValue;
-      try {
-        return JSON.parse(row.value);
-      } catch {
-        return row.value;
-      }
-    };
-
     const imessageStatus = await iMessageService.checkPermissions();
     
     res.json({
-      anthropic: {
-        model: getSettingValue('anthropic.model', 'claude-haiku-4-5-20251001'),
-        temperature: getSettingValue('anthropic.temperature', 0.7),
-        responseMaxTokens: getSettingValue('anthropic.responseMaxTokens', 350),
-        contextWindowTokens: getSettingValue('anthropic.contextWindowTokens', 7000),
-        enableWebSearch: getSettingValue('anthropic.enableWebSearch', true),
-        hasApiKey: !!SecureStorage.getAnthropicApiKey(),
+      model: {
+        name: getSettingValue('model.name', 'gemma-4-e4b'),
+        temperature: getSettingValue('model.temperature', 0.7),
+        responseMaxTokens: getSettingValue('model.responseMaxTokens', 1024),
+        contextSize: getSettingValue('model.contextSize', 8192),
+        gpuLayers: getSettingValue('model.gpuLayers', -1),
+        status: localLLMService.status,
+        isDownloaded: localLLMService.isModelDownloaded(),
+        isLoaded: localLLMService.isConfigured(),
       },
       imessage: {
         configured: imessageStatus.hasAccess,
@@ -115,12 +103,12 @@ router.get('/config', async (_req: Request, res: Response) => {
 
 // Settings key allowlist with expected types (fixes Pre-Phase 0.3)
 const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean' | 'object'> = {
-  // Anthropic
-  'anthropic.model': 'string',
-  'anthropic.temperature': 'number',
-  'anthropic.responseMaxTokens': 'number',
-  'anthropic.contextWindowTokens': 'number',
-  'anthropic.enableWebSearch': 'boolean',
+  // Local Model
+  'model.name': 'string',
+  'model.temperature': 'number',
+  'model.responseMaxTokens': 'number',
+  'model.contextSize': 'number',
+  'model.gpuLayers': 'number',
   // iMessage
   'imessage.sendEnabled': 'boolean',
   // Agent behavior
@@ -191,14 +179,17 @@ router.put('/config', async (req: Request, res: Response) => {
     }
 
     // Propagate config changes to live services (fixes B5)
-    if (updates['anthropic.model']) {
-      claudeService.setModel(updates['anthropic.model']);
+    if (updates['model.responseMaxTokens'] !== undefined) {
+      localLLMService.setMaxTokens(Number(updates['model.responseMaxTokens']));
     }
-    if (updates['anthropic.responseMaxTokens'] !== undefined) {
-      claudeService.setMaxTokens(Number(updates['anthropic.responseMaxTokens']));
+    if (updates['model.temperature'] !== undefined) {
+      localLLMService.setTemperature(Number(updates['model.temperature']));
     }
-    if (updates['anthropic.temperature'] !== undefined) {
-      claudeService.setTemperature(Number(updates['anthropic.temperature']));
+    if (updates['model.contextSize'] !== undefined) {
+      localLLMService.setContextSize(Number(updates['model.contextSize']));
+    }
+    if (updates['model.gpuLayers'] !== undefined) {
+      localLLMService.setGpuLayers(Number(updates['model.gpuLayers']));
     }
 
     log('info', 'Configuration updated', { keys: Object.keys(updates), rejected });
@@ -431,18 +422,12 @@ router.get('/permissions', async (_req: Request, res: Response) => {
           status: 'running',
         },
       ],
-      apiKeys: (() => {
-        const hasKey = SecureStorage.hasAnthropicKey();
-        return [{
-          id: 'anthropic',
-          name: 'Anthropic API Key',
-          description: 'Required for Claude AI responses',
-          required: true,
-          configured: hasKey,
-          masked: hasKey ? 'sk-ant-••••••••' : undefined,
-          docsUrl: 'https://console.anthropic.com/settings/keys',
-        }];
-      })(),
+      localModel: {
+        status: localLLMService.status,
+        isDownloaded: localLLMService.isModelDownloaded(),
+        isLoaded: localLLMService.isConfigured(),
+        downloadProgress: localLLMService.downloadProgress,
+      },
     });
   } catch (error) {
     log('error', 'Get permissions failed', { error: String(error) });
@@ -450,25 +435,43 @@ router.get('/permissions', async (_req: Request, res: Response) => {
   }
 });
 
-// --- Settings API Key ---
-router.post('/settings/api-key', async (req: Request, res: Response) => {
+// --- Model Management ---
+router.get('/model/status', async (_req: Request, res: Response) => {
   try {
-    const { key, value } = req.body;
-    
-    if (key === 'ANTHROPIC_API_KEY') {
-      try {
-        SecureStorage.setAnthropicApiKey(value);
-        log('info', 'Anthropic API key updated');
-        res.json({ success: true });
-      } catch (e: any) {
-        return res.status(400).json({ error: e.message });
-      }
-    } else {
-      res.status(400).json({ error: 'Unknown key' });
-    }
+    res.json({
+      status: localLLMService.status,
+      isDownloaded: localLLMService.isModelDownloaded(),
+      isLoaded: localLLMService.isConfigured(),
+      downloadProgress: localLLMService.downloadProgress,
+    });
   } catch (error) {
-    log('error', 'Save API key failed', { error: String(error) });
-    res.status(500).json({ error: 'Failed to save API key' });
+    log('error', 'Get model status failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to get model status' });
+  }
+});
+
+router.post('/model/download', async (_req: Request, res: Response) => {
+  try {
+    if (localLLMService.status === 'downloading') {
+      return res.status(409).json({ error: 'Download already in progress' });
+    }
+    // Start download in background
+    localLLMService.downloadModel().catch(err => {
+      log('error', 'Model download failed', { error: err.message });
+    });
+    res.json({ success: true, message: 'Download started' });
+  } catch (error) {
+    log('error', 'Start model download failed', { error: String(error) });
+    res.status(500).json({ error: 'Failed to start model download' });
+  }
+});
+
+router.post('/model/load', async (_req: Request, res: Response) => {
+  try {
+    await localLLMService.initModel();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -476,7 +479,6 @@ router.post('/settings/api-key', async (req: Request, res: Response) => {
 // Allowlist of safe URL schemes for opening system settings (fixes A1: command injection)
 const ALLOWED_SETTINGS_PREFIXES = [
   'x-apple.systempreferences:',
-  'https://console.anthropic.com/',
 ];
 
 router.post('/settings/open', async (req: Request, res: Response) => {
@@ -631,18 +633,18 @@ router.get('/permissions/needs-setup', async (_req: Request, res: Response) => {
 router.get('/setup/status', async (_req: Request, res: Response) => {
   try {
     const { permissionService } = await import('../services/PermissionService');
-    const hasApiKey = SecureStorage.hasAnthropicKey();
+    const hasModel = localLLMService.isModelDownloaded();
     const permissionsResult = await permissionService.checkAllPermissions();
     const fullDiskAccess = permissionsResult.permissions.find(p => p.id === 'full_disk_access');
     const automation = permissionsResult.permissions.find(p => p.id === 'automation');
     const contacts = permissionsResult.permissions.find(p => p.id === 'contacts');
     
-    const isConfigured = hasApiKey && permissionsResult.requiredGranted;
+    const isConfigured = hasModel && permissionsResult.requiredGranted;
 
     res.json({
       isConfigured,
       steps: {
-        apiKey: hasApiKey,
+        modelDownloaded: hasModel,
         fullDiskAccess: fullDiskAccess?.status === 'granted',
         automation: automation?.status === 'granted',
         contacts: contacts?.status === 'granted',
@@ -657,37 +659,6 @@ router.get('/setup/status', async (_req: Request, res: Response) => {
   } catch (error) {
     log('error', 'Get setup status failed', { error: String(error) });
     res.status(500).json({ error: 'Failed to get setup status' });
-  }
-});
-
-router.post('/setup/credentials', async (req: Request, res: Response) => {
-  try {
-    const { anthropicApiKey } = req.body;
-
-    if (anthropicApiKey) {
-      try {
-        SecureStorage.setAnthropicApiKey(anthropicApiKey);
-        log('info', 'Anthropic API key saved');
-      } catch (e: any) {
-        return res.status(400).json({ error: e.message });
-      }
-    }
-
-    // Check full configuration status (API key + iMessage access)
-    const imessageStatus = await iMessageService.checkPermissions();
-    const isFullyConfigured = SecureStorage.hasAnthropicKey() && imessageStatus.hasAccess;
-
-    res.json({
-      success: true,
-      isConfigured: isFullyConfigured,
-      details: {
-        apiKey: SecureStorage.hasAnthropicKey(),
-        imessage: imessageStatus.hasAccess,
-      },
-    });
-  } catch (error) {
-    log('error', 'Save credentials failed', { error: String(error) });
-    res.status(500).json({ error: 'Failed to save credentials' });
   }
 });
 
@@ -707,38 +678,15 @@ router.post('/setup/test-imessage', async (_req: Request, res: Response) => {
   }
 });
 
-router.post('/setup/test-anthropic', async (req: Request, res: Response) => {
+router.post('/setup/test-model', async (_req: Request, res: Response) => {
   try {
-    const { apiKey } = req.body;
-    const testKey = apiKey || SecureStorage.getAnthropicApiKey();
-
-    if (!testKey) {
-      return res.status(400).json({ error: 'API key required' });
+    if (!localLLMService.isModelDownloaded()) {
+      return res.json({ success: false, error: 'Model not downloaded yet' });
     }
-
-    // Validate format
-    if (!testKey.startsWith('sk-ant-')) {
-      return res.json({ success: false, error: 'Invalid API key format' });
-    }
-
-    // Actually test the API key with a minimal request (fixes B11)
-    try {
-      const Anthropic = require('@anthropic-ai/sdk');
-      const testClient = new Anthropic.default({ apiKey: testKey });
-      await testClient.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'test' }],
-      });
-      res.json({ success: true });
-    } catch (apiError: any) {
-      const msg = apiError?.status === 401 ? 'Invalid API key' 
-        : apiError?.status === 429 ? 'Rate limited — key is valid but try again later'
-        : `API error: ${apiError?.message || 'Unknown error'}`;
-      res.json({ success: apiError?.status === 429, error: msg });
-    }
+    // Try loading the model
+    await localLLMService.initModel();
+    res.json({ success: true });
   } catch (error: any) {
-    log('warn', 'Anthropic test failed', { error: error.message });
     res.json({ success: false, error: error.message });
   }
 });
@@ -756,9 +704,6 @@ router.get('/agent/status', async (_req: Request, res: Response) => {
 
 router.post('/agent/start', async (_req: Request, res: Response) => {
   try {
-    // Refresh Claude client with latest API key
-    claudeService.refreshClient();
-    
     const started = await agentService.start();
     if (started) {
       log('info', 'Agent started via dashboard');
@@ -766,7 +711,7 @@ router.post('/agent/start', async (_req: Request, res: Response) => {
     } else {
       res.status(400).json({ 
         success: false, 
-        error: 'Failed to start agent. Check that Anthropic API key is configured and Full Disk Access is granted.' 
+        error: 'Failed to start agent. Check that the AI model is downloaded and Full Disk Access is granted.' 
       });
     }
   } catch (error: any) {
@@ -789,7 +734,7 @@ router.post('/agent/stop', async (_req: Request, res: Response) => {
 router.post('/agent/restart', async (_req: Request, res: Response) => {
   try {
     await agentService.stop();
-    claudeService.refreshClient();
+    localLLMService.refreshClient();
     const started = await agentService.start();
     if (started) {
       log('info', 'Agent restarted via dashboard');

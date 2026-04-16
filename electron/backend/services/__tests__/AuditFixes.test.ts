@@ -64,21 +64,23 @@ vi.mock('../iMessageService', () => {
   };
 });
 
-vi.mock('../ClaudeService', () => ({
-  claudeService: {
+vi.mock('../LocalLLMService', () => ({
+  localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
+    initModel: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn().mockResolvedValue({
       text: 'Hello!',
       inputTokens: 100,
       outputTokens: 50,
-      model: 'claude-haiku-4-5-20251001',
     }),
-    setModel: vi.fn(),
     setMaxTokens: vi.fn(),
     setTemperature: vi.fn(),
+    setContextSize: vi.fn(),
+    syncSettings: vi.fn(),
+    status: 'loaded',
+    isModelDownloaded: vi.fn().mockReturnValue(true),
   },
-  Message: {},
 }));
 
 vi.mock('../MessageFormatter', () => ({
@@ -102,15 +104,13 @@ vi.mock('../MemoryService', () => ({
 
 vi.mock('../PromptBuilder', () => ({
   promptBuilder: {
-    buildWithCacheControl: vi.fn().mockReturnValue([
-      { type: 'text', text: 'system prompt' },
-    ]),
+    build: vi.fn().mockReturnValue('system prompt'),
   },
 }));
 
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
-    getAnthropicTools: vi.fn().mockReturnValue([]),
+    getEnabledDefinitions: vi.fn().mockReturnValue([]),
     executeToolCall: vi.fn(),
     getDefinitions: vi.fn().mockReturnValue([]),
   },
@@ -192,35 +192,18 @@ describe('C1: Schema deduplication', () => {
 // ===========================================================================
 // H1 — Budget circuit breaker uses per-model pricing
 // ===========================================================================
-describe('H1: Budget per-model pricing', () => {
-  it('AgentService.ts references MODEL_COST with multiple models', async () => {
+describe('H1: Local model configuration', () => {
+  it('AgentService.ts uses LocalLLMService for response generation', async () => {
     const fs = await import('fs');
     const path = await import('path');
     const source = fs.readFileSync(
       path.resolve(__dirname, '../AgentService.ts'),
       'utf-8'
     );
-    // Should NOT have the old hardcoded Haiku-only comment
-    expect(source).not.toContain('Approximate cost calculation for Claude 3.5 Haiku');
-    // Should have per-model cost map
-    expect(source).toContain('claude-haiku-4-5-20251001');
-    expect(source).toContain('claude-sonnet-4-5-20250929');
-    expect(source).toContain('claude-sonnet-4-20250514');
-    expect(source).toContain('MODEL_COST');
-    // Should read model from settings
-    expect(source).toContain("getSetting('anthropic.model')");
-  });
-
-  it('Haiku pricing is cheaper than Sonnet pricing in the cost map', async () => {
-    const fs = await import('fs');
-    const path = await import('path');
-    const source = fs.readFileSync(
-      path.resolve(__dirname, '../AgentService.ts'),
-      'utf-8'
-    );
-    // Extract the cost map entries — Haiku input=80 vs Sonnet input=300
-    expect(source).toContain("'claude-haiku-4-5-20251001':  { input: 80,   output: 400  }");
-    expect(source).toContain("'claude-sonnet-4-5-20250929': { input: 300,  output: 1500 }");
+    // Should reference local LLM service
+    expect(source).toContain('localLLMService');
+    // Should NOT reference Claude anymore
+    expect(source).not.toContain('claudeService');
   });
 });
 
@@ -301,25 +284,23 @@ describe('H3: RateLimiter cleanup wired', () => {
 // H4 — URL allowlists consolidated
 // ===========================================================================
 describe('H4: URL allowlists consistent', () => {
-  it('PermissionService includes anthropic console URL', async () => {
+  it('PermissionService includes system preferences URL', async () => {
     const fs = await import('fs');
     const path = await import('path');
     const source = fs.readFileSync(
       path.resolve(__dirname, '../PermissionService.ts'),
       'utf-8'
     );
-    expect(source).toContain('https://console.anthropic.com/');
     expect(source).toContain('x-apple.systempreferences:');
   });
 
-  it('dashboard route includes same prefixes', async () => {
+  it('dashboard route includes system preferences URL', async () => {
     const fs = await import('fs');
     const path = await import('path');
     const source = fs.readFileSync(
       path.resolve(__dirname, '../../routes/dashboard.ts'),
       'utf-8'
     );
-    expect(source).toContain('https://console.anthropic.com/');
     expect(source).toContain('x-apple.systempreferences:');
   });
 });

@@ -105,6 +105,15 @@ body {
   top: 0;
 }
 
+/* Step transition animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-in.fade-in {
+  animation: fadeIn 0.3s ease-out both;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

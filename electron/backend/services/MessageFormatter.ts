@@ -7,7 +7,7 @@ import type { FormatterOptions, FormatterResult } from '../types';
  * MessageFormatter — 7-stage response processing pipeline.
  * Phase 2a, Task 2.2
  *
- * Every Claude response passes through these stages IN ORDER before reaching iMessage:
+ * Every LLM response passes through these stages IN ORDER before reaching iMessage:
  *   1. Sanitize (output safety check)
  *   2. Strip markdown
  *   3. Format citations
@@ -50,7 +50,7 @@ const PII_PATTERNS = [
 
 export class MessageFormatter {
   /**
-   * Run the full formatting pipeline on a raw Claude response.
+   * Run the full formatting pipeline on a raw LLM response.
    */
   format(rawResponse: string, options?: Partial<FormatterOptions>): FormatterResult {
     const opts: FormatterOptions = { ...DEFAULT_OPTIONS, ...options };

@@ -69,15 +69,18 @@ vi.mock('../iMessageService', () => {
   };
 });
 
-vi.mock('../ClaudeService', () => ({
-  claudeService: {
+vi.mock('../LocalLLMService', () => ({
+  localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
+    initModel: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
-    setModel: vi.fn(),
     setMaxTokens: vi.fn(),
     setTemperature: vi.fn(),
+    setContextSize: vi.fn(),
     syncSettings: vi.fn(),
+    status: 'loaded',
+    isModelDownloaded: vi.fn().mockReturnValue(true),
   },
 }));
 
@@ -98,15 +101,13 @@ vi.mock('../MemoryService', () => ({
 
 vi.mock('../PromptBuilder', () => ({
   promptBuilder: {
-    buildWithCacheControl: vi.fn().mockReturnValue([
-      { type: 'text', text: 'system prompt' },
-    ]),
+    build: vi.fn().mockReturnValue('system prompt'),
   },
 }));
 
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
-    getAnthropicTools: vi.fn().mockReturnValue([]),
+    getEnabledDefinitions: vi.fn().mockReturnValue([]),
     executeToolCall: vi.fn(),
     getDefinitions: vi.fn().mockReturnValue([]),
   },
@@ -124,7 +125,7 @@ vi.mock('../RateLimiter', () => ({
 // ---------------------------------------------------------------------------
 import { AgentService } from '../AgentService';
 import { iMessageService } from '../iMessageService';
-import { claudeService } from '../ClaudeService';
+import { localLLMService } from '../LocalLLMService';
 import { messageFormatter } from '../MessageFormatter';
 import { log } from '../../logger';
 
@@ -280,7 +281,7 @@ describe('Multi-bubble delivery via AgentService', () => {
   });
 
   it('should send each chunk as a separate iMessage with delays between', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Bubble 1 content\n\nBubble 2 content\n\nBubble 3 content',
       inputTokens: 100,
       outputTokens: 50,
@@ -317,7 +318,7 @@ describe('Multi-bubble delivery via AgentService', () => {
   });
 
   it('should stop sending chunks if one fails', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'A\n\nB\n\nC',
       inputTokens: 50,
       outputTokens: 20,
@@ -377,7 +378,7 @@ describe('Typing indicator delay', () => {
 
   it('should delay at least 800ms before sending (minimum typing time)', async () => {
     // Very short response — should still wait 800ms minimum
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hi',
       inputTokens: 50,
       outputTokens: 5,
@@ -399,7 +400,7 @@ describe('Typing indicator delay', () => {
 
   it('should cap delay at 3000ms for long responses', async () => {
     // Very long response — delay should not exceed 3000ms
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'X'.repeat(500),
       inputTokens: 100,
       outputTokens: 200,
@@ -417,7 +418,7 @@ describe('Typing indicator delay', () => {
 
   it('should scale delay based on response length', async () => {
     // Medium response: 100 chars * 15ms/char = 1500ms (between min and max)
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Y'.repeat(100),
       inputTokens: 80,
       outputTokens: 40,
@@ -466,10 +467,10 @@ describe('Double-text queue serialization', () => {
   });
 
   it('should process only one message at a time per chat (no double responses)', async () => {
-    // First call takes a while (simulates Claude processing)
+    // First call takes a while (simulates LLM processing)
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
-    vi.mocked(claudeService.generateResponse)
+    vi.mocked(localLLMService.generateResponse)
       .mockReturnValueOnce(firstPromise as any)
       .mockResolvedValueOnce({
         content: 'Response to second',
@@ -509,11 +510,11 @@ describe('Double-text queue serialization', () => {
     await vi.advanceTimersByTimeAsync(15000);
 
     // Both messages should have been processed sequentially
-    expect(vi.mocked(claudeService.generateResponse).mock.calls.length).toBe(2);
+    expect(vi.mocked(localLLMService.generateResponse).mock.calls.length).toBe(2);
   });
 
   it('should NOT process the same message GUID twice', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hello!',
       inputTokens: 50,
       outputTokens: 10,
@@ -532,15 +533,15 @@ describe('Double-text queue serialization', () => {
     await p1;
     await p2;
 
-    // Claude should only be called once for the duplicate
-    expect(vi.mocked(claudeService.generateResponse).mock.calls.length).toBe(1);
+    // LLM should only be called once for the duplicate
+    expect(vi.mocked(localLLMService.generateResponse).mock.calls.length).toBe(1);
   });
 
   it('should queue up to MAX_CHAT_QUEUE_SIZE messages and drop oldest when full', async () => {
     // Block the first message so all subsequent ones queue up
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
-    vi.mocked(claudeService.generateResponse).mockReturnValue(firstPromise as any);
+    vi.mocked(localLLMService.generateResponse).mockReturnValue(firstPromise as any);
 
     // Send first message to acquire the lock
     const m1 = msg('msg 1');
@@ -582,7 +583,7 @@ describe('Double-text queue serialization', () => {
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
 
-    vi.mocked(claudeService.generateResponse)
+    vi.mocked(localLLMService.generateResponse)
       .mockReturnValueOnce(firstPromise as any)
       .mockImplementation(async (text: string) => ({
         content: `Reply to: ${text}`,
@@ -625,7 +626,7 @@ describe('Double-text queue serialization', () => {
     let callCount = 0;
     const capturedCalls: { text: string; messages: any[] }[] = [];
 
-    vi.mocked(claudeService.generateResponse).mockImplementation(async (text: any, messages: any) => {
+    vi.mocked(localLLMService.generateResponse).mockImplementation(async (text: any, messages: any) => {
       callCount++;
       capturedCalls.push({ text, messages: [...(messages || [])] });
       return {
@@ -683,7 +684,7 @@ describe('Chunk delay between bubbles', () => {
   });
 
   it('should wait agent.splitDelaySeconds between sending each bubble', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'First bubble\n\nSecond bubble',
       inputTokens: 50,
       outputTokens: 20,

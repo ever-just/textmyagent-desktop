@@ -468,6 +468,16 @@ export function getSettingFloat(key: string, defaultValue: number): number {
   }
 }
 
+export function getSettingValue(key: string, defaultValue: any): any {
+  const raw = getSetting(key);
+  if (raw === null) return defaultValue;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export function deleteSetting(key: string): void {
   const db = getDatabase();
   db.prepare('DELETE FROM settings WHERE key = ?').run(key);
@@ -481,12 +491,12 @@ export function deleteSetting(key: string): void {
 export function seedDefaultSettings(): void {
   const db = getDatabase();
   const defaults: Record<string, string> = {
-    // Anthropic
-    'anthropic.model': JSON.stringify('claude-haiku-4-5-20251001'),
-    'anthropic.temperature': JSON.stringify(0.7),
-    'anthropic.responseMaxTokens': JSON.stringify(1024),
-    'anthropic.contextWindowTokens': JSON.stringify(7000),
-    'anthropic.enableWebSearch': JSON.stringify(true),
+    // Local Model
+    'model.name': JSON.stringify('gemma-4-e4b'),
+    'model.temperature': JSON.stringify(0.7),
+    'model.responseMaxTokens': JSON.stringify(1024),
+    'model.contextSize': JSON.stringify(8192),
+    'model.gpuLayers': JSON.stringify(-1),
     // iMessage
     'imessage.sendEnabled': JSON.stringify(true),
     // Agent persona (SOUL.md-style sections, editable from dashboard)
@@ -544,23 +554,11 @@ export function seedDefaultSettings(): void {
 
   seedTx();
 
-  // Migration: bump responseMaxTokens from old default (350) to 1024
-  // so tool calls (react_to_message, wait) have enough token budget.
-  // Only updates if still at the old default — preserves user-customized values.
-  try {
-    const current = db.prepare("SELECT value FROM settings WHERE key = 'anthropic.responseMaxTokens'").get() as { value: string } | undefined;
-    if (current && JSON.parse(current.value) <= 350) {
-      db.prepare("UPDATE settings SET value = ?, updated_at = datetime('now') WHERE key = 'anthropic.responseMaxTokens'")
-        .run(JSON.stringify(1024));
-      console.log('[Database] Migrated responseMaxTokens 350 → 1024');
-    }
-  } catch { /* ignore migration errors */ }
-
   console.log('[Database] Default settings seeded');
 }
 
 // Record API usage for token tracking
-export function recordApiUsage(inputTokens: number, outputTokens: number, model = 'claude-haiku-4-5-20251001'): void {
+export function recordApiUsage(inputTokens: number, outputTokens: number, model = 'gemma-4-e4b'): void {
   const db = getDatabase();
   const today = new Date().toISOString().split('T')[0];
   

@@ -195,12 +195,18 @@ app.on('will-quit', async (event) => {
   console.log('App quitting, cleaning up...');
 
   try {
-    // Stop agent before closing server/database to prevent polling errors
+    // Stop agent and dispose local model before closing server/database
     try {
       const { agentService } = require('./backend/services/AgentService');
       await agentService.stop();
     } catch (_e) {
       // Agent may not have been started
+    }
+    try {
+      const { localLLMService } = require('./backend/services/LocalLLMService');
+      await localLLMService.dispose();
+    } catch (_e) {
+      // Model may not have been loaded
     }
     await stopBackendServer();
     closeDatabase();
@@ -266,3 +272,28 @@ ipcMain.handle('quit-app', () => {
 });
 
 ipcMain.handle('get-user-data-path', () => app.getPath('userData'));
+
+// Model IPC handlers
+ipcMain.handle('model:status', () => {
+  try {
+    const { localLLMService } = require('./backend/services/LocalLLMService');
+    return {
+      status: localLLMService.status,
+      isDownloaded: localLLMService.isModelDownloaded(),
+      isLoaded: localLLMService.isConfigured(),
+      downloadProgress: localLLMService.downloadProgress,
+    };
+  } catch {
+    return { status: 'error', isDownloaded: false, isLoaded: false, downloadProgress: 0 };
+  }
+});
+
+ipcMain.handle('model:download', async () => {
+  try {
+    const { localLLMService } = require('./backend/services/LocalLLMService');
+    const modelPath = await localLLMService.downloadModel();
+    return { success: true, modelPath };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});

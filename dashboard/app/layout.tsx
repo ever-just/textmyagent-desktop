@@ -2,11 +2,17 @@
 
 import './globals.css';
 import { useEffect, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { useSetupStatus } from '@/lib/hooks';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const pathname = usePathname();
+  const router = useRouter();
+  const { data: setup } = useSetupStatus();
+  const isSetupPage = pathname === '/setup';
 
   useEffect(() => {
     // Detect system theme
@@ -20,6 +26,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  // Redirect to /setup if the app is not configured and user is not already there
+  useEffect(() => {
+    if (!setup) return;
+    if (!setup.needsSetup) {
+      // Setup complete — clear any previous skip flag
+      try { localStorage.removeItem('setup-skipped'); } catch {}
+      return;
+    }
+    const skipped = typeof window !== 'undefined' && localStorage.getItem('setup-skipped');
+    if (!skipped && !isSetupPage) {
+      router.replace('/setup');
+    }
+  }, [setup, isSetupPage, router]);
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -37,7 +57,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {/* macOS title bar drag region */}
           <div className="titlebar-drag fixed top-0 left-0 right-0 h-[38px] z-50" />
 
-          <Sidebar />
+          {!isSetupPage && <Sidebar />}
 
           <main
             id="main-content"

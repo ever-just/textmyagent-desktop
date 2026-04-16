@@ -60,29 +60,28 @@ router.get('/config', async (_req: Request, res: Response) => {
   }
 });
 
-// --- Budget Status ---
+// --- Budget Status (token-based for local inference) ---
 router.get('/budget', async (_req: Request, res: Response) => {
   try {
     const db = getDatabase();
     const today = new Date().toISOString().split('T')[0];
-    const dailyBudgetCents = getSettingInt('security.dailyBudgetCents', 0);
+    const dailyTokenBudget = getSettingInt('security.dailyBudgetCents', 0);
 
     const row = db.prepare(
-      'SELECT SUM(input_tokens) as inputTokens, SUM(output_tokens) as outputTokens FROM api_usage WHERE date = ?'
-    ).get(today) as { inputTokens: number | null; outputTokens: number | null } | undefined;
+      'SELECT SUM(input_tokens) as inputTokens, SUM(output_tokens) as outputTokens, SUM(total_tokens) as totalTokens FROM api_usage WHERE date = ?'
+    ).get(today) as { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } | undefined;
 
     const inputTokens = row?.inputTokens || 0;
     const outputTokens = row?.outputTokens || 0;
-    // Approximate cost: Haiku input $1/1M, output $5/1M
-    const costCents = (inputTokens / 1_000_000) * 100 + (outputTokens / 1_000_000) * 500;
+    const totalTokens = row?.totalTokens || 0;
 
     res.json({
-      dailyBudgetCents,
-      spentCents: Math.round(costCents * 100) / 100,
+      dailyBudgetCents: dailyTokenBudget,
+      spentCents: totalTokens,
       inputTokens,
       outputTokens,
-      isExceeded: dailyBudgetCents > 0 && costCents >= dailyBudgetCents,
-      percentUsed: dailyBudgetCents > 0 ? Math.min(100, Math.round((costCents / dailyBudgetCents) * 100)) : 0,
+      isExceeded: dailyTokenBudget > 0 && totalTokens >= dailyTokenBudget,
+      percentUsed: dailyTokenBudget > 0 ? Math.min(100, Math.round((totalTokens / dailyTokenBudget) * 100)) : 0,
     });
   } catch (error) {
     log('error', 'Get budget status failed', { error: String(error) });

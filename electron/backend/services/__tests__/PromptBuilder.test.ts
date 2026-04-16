@@ -116,36 +116,26 @@ describe('PromptBuilder', () => {
     });
   });
 
-  describe('buildWithCacheControl', () => {
-    it('returns at least one block with cache_control', () => {
-      const blocks = builder.buildWithCacheControl();
-      expect(blocks.length).toBeGreaterThanOrEqual(1);
-      expect(blocks[0].cache_control).toEqual({ type: 'ephemeral' });
+  describe('build (plain string)', () => {
+    it('returns a string containing all static sections', () => {
+      const prompt = builder.build();
+      expect(typeof prompt).toBe('string');
+      expect(prompt).toContain('[IDENTITY]');
+      expect(prompt).toContain('[PERSONA]');
+      expect(prompt).toContain('[GUIDELINES]');
+      expect(prompt).toContain('[SAFETY]');
+      expect(prompt).toContain('[FORMAT]');
     });
 
-    it('first block contains all static sections', () => {
-      const blocks = builder.buildWithCacheControl();
-      const staticText = blocks[0].text;
-      expect(staticText).toContain('[IDENTITY]');
-      expect(staticText).toContain('[PERSONA]');
-      expect(staticText).toContain('[GUIDELINES]');
-      expect(staticText).toContain('[SAFETY]');
-      expect(staticText).toContain('[FORMAT]');
+    it('includes dynamic context when provided', () => {
+      const prompt = builder.build({ date: '2025-01-01', contactName: 'Bob' });
+      expect(prompt).toContain('[CONTEXT]');
+      expect(prompt).toContain('[CONTACT]');
     });
 
-    it('adds dynamic block when context is provided', () => {
-      const blocks = builder.buildWithCacheControl({ date: '2025-01-01', contactName: 'Bob' });
-      expect(blocks.length).toBe(2);
-      expect(blocks[1].text).toContain('[CONTEXT]');
-      expect(blocks[1].text).toContain('[CONTACT]');
-      expect(blocks[1].cache_control).toBeUndefined();
-    });
-
-    it('returns static block plus DATA_BOUNDARY when no dynamic context', () => {
-      const blocks = builder.buildWithCacheControl();
-      // 1 cached static block + 1 dynamic block with DATA_BOUNDARY (spotlighting)
-      expect(blocks.length).toBe(2);
-      expect(blocks[1].text).toContain('[DATA_BOUNDARY]');
+    it('includes DATA_BOUNDARY when no dynamic context', () => {
+      const prompt = builder.build();
+      expect(prompt).toContain('[DATA_BOUNDARY]');
     });
   });
 

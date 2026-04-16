@@ -2,7 +2,7 @@
  * Simulation tests for tool use flows: react_to_message, wait, react+wait,
  * normal response, contact allowlist, and tool enable/disable toggles.
  *
- * These tests mock the Claude API response and verify the full pipeline
+ * These tests mock the LLM response and verify the full pipeline
  * from incoming message → tool execution → response delivery.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
@@ -69,15 +69,18 @@ vi.mock('../iMessageService', () => {
   };
 });
 
-vi.mock('../ClaudeService', () => ({
-  claudeService: {
+vi.mock('../LocalLLMService', () => ({
+  localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
+    initModel: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
-    setModel: vi.fn(),
     setMaxTokens: vi.fn(),
     setTemperature: vi.fn(),
+    setContextSize: vi.fn(),
     syncSettings: vi.fn(),
+    status: 'loaded',
+    isModelDownloaded: vi.fn().mockReturnValue(true),
   },
 }));
 
@@ -97,17 +100,15 @@ vi.mock('../MemoryService', () => ({
 
 vi.mock('../PromptBuilder', () => ({
   promptBuilder: {
-    buildWithCacheControl: vi.fn().mockReturnValue([
-      { type: 'text', text: 'system prompt' },
-    ]),
+    build: vi.fn().mockReturnValue('system prompt'),
   },
 }));
 
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
-    getAnthropicTools: vi.fn().mockReturnValue([
-      { name: 'react_to_message', description: 'Send tapback', input_schema: {} },
-      { name: 'wait', description: 'Skip response', input_schema: {} },
+    getEnabledDefinitions: vi.fn().mockReturnValue([
+      { name: 'react_to_message', description: 'Send tapback', inputSchema: {} },
+      { name: 'wait', description: 'Skip response', inputSchema: {} },
     ]),
     executeToolCall: vi.fn(),
     getDefinitions: vi.fn().mockReturnValue([]),
@@ -126,7 +127,7 @@ vi.mock('../RateLimiter', () => ({
 // ---------------------------------------------------------------------------
 import { AgentService } from '../AgentService';
 import { iMessageService } from '../iMessageService';
-import { claudeService } from '../ClaudeService';
+import { localLLMService } from '../LocalLLMService';
 import { messageFormatter } from '../MessageFormatter';
 import { log } from '../../logger';
 
@@ -178,9 +179,9 @@ describe('Tool Simulation Tests', () => {
   // Scenario 1: Normal text response (no tools)
   // =========================================================================
   describe('Scenario 1: Normal text response', () => {
-    it('should send a text reply when Claude responds with text only', async () => {
-      // Simulate: User asks "What time is it?" → Claude responds with text
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    it('should send a text reply when LLM responds with text only', async () => {
+      // Simulate: User asks "What time is it?" → LLM responds with text
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: "It's about 2pm!",
         inputTokens: 150,
         outputTokens: 30,
@@ -198,7 +199,7 @@ describe('Tool Simulation Tests', () => {
       );
 
       // Should NOT have called wait or react
-      const genCall = vi.mocked(claudeService.generateResponse).mock.calls[0];
+      const genCall = vi.mocked(localLLMService.generateResponse).mock.calls[0];
       expect(genCall[0]).toBe('What time is it?');
     });
   });
@@ -207,9 +208,9 @@ describe('Tool Simulation Tests', () => {
   // Scenario 2: Wait tool only (agent chooses silence)
   // =========================================================================
   describe('Scenario 2: Wait tool — agent stays silent', () => {
-    it('should NOT send any text when Claude uses wait tool', async () => {
-      // Simulate: User says "ok" → Claude calls wait → no text response
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    it('should NOT send any text when LLM uses wait tool', async () => {
+      // Simulate: User says "ok" → LLM calls wait → no text response
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 120,
         outputTokens: 40,
@@ -234,7 +235,7 @@ describe('Tool Simulation Tests', () => {
     });
 
     it('should handle "thanks" message with wait', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 130,
         outputTokens: 35,
@@ -263,9 +264,9 @@ describe('Tool Simulation Tests', () => {
   // Scenario 3: React tool + text response (good news)
   // =========================================================================
   describe('Scenario 3: React + text response', () => {
-    it('should send text when Claude reacts AND responds', async () => {
-      // Simulate: User says "I got the job!" → Claude reacts with love + sends congrats
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    it('should send text when LLM reacts AND responds', async () => {
+      // Simulate: User says "I got the job!" → LLM reacts with love + sends congrats
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: 'Congrats!! That is amazing news 🎉',
         inputTokens: 180,
         outputTokens: 55,
@@ -288,8 +289,8 @@ describe('Tool Simulation Tests', () => {
   // Scenario 4: React + wait (acknowledgment — no text needed)
   // =========================================================================
   describe('Scenario 4: React + wait (tapback only)', () => {
-    it('should NOT send text when Claude reacts + waits for "got it"', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    it('should NOT send text when LLM reacts + waits for "got it"', async () => {
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 110,
         outputTokens: 45,
@@ -303,8 +304,8 @@ describe('Tool Simulation Tests', () => {
       expect(iMessageService.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should NOT send text when Claude reacts + waits for "bye"', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    it('should NOT send text when LLM reacts + waits for "bye"', async () => {
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 105,
         outputTokens: 42,
@@ -324,7 +325,7 @@ describe('Tool Simulation Tests', () => {
   // =========================================================================
   describe('Scenario 5: User tapback reaction — agent waits', () => {
     it('should NOT respond to "Liked" tapback text', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 95,
         outputTokens: 30,
@@ -340,11 +341,11 @@ describe('Tool Simulation Tests', () => {
   });
 
   // =========================================================================
-  // Scenario 6: Claude returns null (API error)
+  // Scenario 6: LLM returns null (error)
   // =========================================================================
-  describe('Scenario 6: Claude API failure', () => {
-    it('should log error when Claude returns null', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue(null as any);
+  describe('Scenario 6: LLM failure', () => {
+    it('should log error when LLM returns null', async () => {
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue(null as any);
 
       const msg = createMessage('Hello?');
       await (agent as any).handleIncomingMessage(msg);
@@ -352,7 +353,7 @@ describe('Tool Simulation Tests', () => {
       expect(iMessageService.sendMessage).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
         'error',
-        'No response generated from Claude'
+        'No response generated from local LLM'
       );
     });
   });
@@ -362,7 +363,7 @@ describe('Tool Simulation Tests', () => {
   // =========================================================================
   describe('Scenario 7: Multi-chunk response', () => {
     it('should send all chunks when response is split', async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: 'Part 1\n\nPart 2',
         inputTokens: 200,
         outputTokens: 60,
@@ -416,7 +417,7 @@ describe('Contact Allowlist Simulation', () => {
   it('should process messages from anyone when replyMode is "everyone"', async () => {
     _settingsStore['agent.replyMode'] = JSON.stringify('everyone');
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hi there!',
       inputTokens: 100,
       outputTokens: 20,
@@ -427,7 +428,7 @@ describe('Contact Allowlist Simulation', () => {
     const msg = createMessage('hello', { handleId: '+19999999999' });
     await (agent as any).handleIncomingMessage(msg);
 
-    expect(claudeService.generateResponse).toHaveBeenCalled();
+    expect(localLLMService.generateResponse).toHaveBeenCalled();
   });
 
   it('should SKIP messages from contacts NOT in allowlist', async () => {
@@ -437,8 +438,8 @@ describe('Contact Allowlist Simulation', () => {
     const msg = createMessage('hello', { handleId: '+19999999999' });
     await (agent as any).handleIncomingMessage(msg);
 
-    // Claude should NOT have been called
-    expect(claudeService.generateResponse).not.toHaveBeenCalled();
+    // LLM should NOT have been called
+    expect(localLLMService.generateResponse).not.toHaveBeenCalled();
 
     // Should log the skip
     expect(log).toHaveBeenCalledWith(
@@ -452,7 +453,7 @@ describe('Contact Allowlist Simulation', () => {
     _settingsStore['agent.replyMode'] = JSON.stringify('allowlist');
     _settingsStore['agent.allowedContacts'] = JSON.stringify(['+11234567890']);
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hey!',
       inputTokens: 100,
       outputTokens: 20,
@@ -466,7 +467,7 @@ describe('Contact Allowlist Simulation', () => {
     });
     await (agent as any).handleIncomingMessage(msg);
 
-    expect(claudeService.generateResponse).toHaveBeenCalled();
+    expect(localLLMService.generateResponse).toHaveBeenCalled();
   });
 
   it('should normalize phone numbers for allowlist matching (last 10 digits)', async () => {
@@ -474,7 +475,7 @@ describe('Contact Allowlist Simulation', () => {
     // Stored with country code prefix
     _settingsStore['agent.allowedContacts'] = JSON.stringify(['+11234567890']);
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hey!',
       inputTokens: 100,
       outputTokens: 20,
@@ -490,7 +491,7 @@ describe('Contact Allowlist Simulation', () => {
     await (agent as any).handleIncomingMessage(msg);
 
     // Should match via normalized comparison
-    expect(claudeService.generateResponse).toHaveBeenCalled();
+    expect(localLLMService.generateResponse).toHaveBeenCalled();
   });
 });
 
@@ -600,77 +601,77 @@ describe('Decision Matrix — Full Message Flow Simulations', () => {
     {
       name: 'Question → RESPOND with text',
       userMessage: "What's your email?",
-      claudeResponse: { content: 'My email is hello@example.com', toolsUsed: [], stopReason: 'end_turn' },
+      llmResponse: { content: 'My email is hello@example.com', toolsUsed: [], stopReason: 'end_turn' },
       expectSend: true,
       expectText: 'My email is hello@example.com',
     },
     {
       name: 'Acknowledgment "ok" → react + wait (no text)',
       userMessage: 'ok',
-      claudeResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
       name: 'Gratitude "thanks!" → react + wait (no text)',
       userMessage: 'thanks!',
-      claudeResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
       name: 'Good news → react + RESPOND',
       userMessage: 'I passed my exam!',
-      claudeResponse: { content: 'That is incredible!! So proud of you', toolsUsed: ['react_to_message'], stopReason: 'end_turn' },
+      llmResponse: { content: 'That is incredible!! So proud of you', toolsUsed: ['react_to_message'], stopReason: 'end_turn' },
       expectSend: true,
       expectText: 'That is incredible!! So proud of you',
     },
     {
       name: 'Funny message → react + wait',
       userMessage: 'lol',
-      claudeResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
       name: 'Goodbye → react + wait',
       userMessage: 'ttyl',
-      claudeResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
       name: 'User tapback → wait only',
       userMessage: 'Loved "sounds good"',
-      claudeResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
       name: 'Request for info → RESPOND',
       userMessage: 'Tell me about quantum computing',
-      claudeResponse: { content: 'Quantum computing uses qubits...', toolsUsed: [], stopReason: 'end_turn' },
+      llmResponse: { content: 'Quantum computing uses qubits...', toolsUsed: [], stopReason: 'end_turn' },
       expectSend: true,
       expectText: 'Quantum computing uses qubits...',
     },
     {
       name: '"Can you..." → RESPOND',
       userMessage: 'Can you help me with my homework?',
-      claudeResponse: { content: 'Of course! What subject?', toolsUsed: [], stopReason: 'end_turn' },
+      llmResponse: { content: 'Of course! What subject?', toolsUsed: [], stopReason: 'end_turn' },
       expectSend: true,
       expectText: 'Of course! What subject?',
     },
     {
       name: 'Simple "k" → react + wait',
       userMessage: 'k',
-      claudeResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
   ];
 
   for (const scenario of scenarios) {
     it(`${scenario.name}`, async () => {
-      vi.mocked(claudeService.generateResponse).mockResolvedValue({
-        content: scenario.claudeResponse.content,
+      vi.mocked(localLLMService.generateResponse).mockResolvedValue({
+        content: scenario.llmResponse.content,
         inputTokens: 100,
         outputTokens: 40,
-        stopReason: scenario.claudeResponse.stopReason,
-        toolsUsed: scenario.claudeResponse.toolsUsed,
+        stopReason: scenario.llmResponse.stopReason,
+        toolsUsed: scenario.llmResponse.toolsUsed,
       } as any);
 
       const msg = createMessage(scenario.userMessage);

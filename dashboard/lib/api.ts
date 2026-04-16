@@ -59,13 +59,15 @@ export async function restartAgent() {
 // --- Config ---
 export async function getConfig() {
   return request<{
-    anthropic: {
-      model: string;
+    model: {
+      name: string;
       temperature: number;
       responseMaxTokens: number;
-      contextWindowTokens: number;
-      enableWebSearch: boolean;
-      hasApiKey: boolean;
+      contextSize: number;
+      gpuLayers: number;
+      status: string;
+      isDownloaded: boolean;
+      isLoaded: boolean;
     };
     imessage: { configured: boolean; sendEnabled: boolean; error?: string };
     app: { version: string; platform: string; arch: string };
@@ -84,24 +86,32 @@ export async function updateConfig(updates: Record<string, unknown>) {
 export async function getSetupStatus() {
   return request<{
     isConfigured: boolean;
-    steps: { apiKey: boolean; fullDiskAccess: boolean; automation: boolean; contacts: boolean };
+    steps: { modelDownloaded: boolean; fullDiskAccess: boolean; automation: boolean; contacts: boolean };
     permissions: { allGranted: boolean; requiredGranted: boolean; details: Permission[] };
     needsSetup: boolean;
   }>('/setup/status');
 }
 
-export async function saveCredentials(anthropicApiKey: string) {
-  return request<{ success: boolean; isConfigured: boolean }>('/setup/credentials', {
-    method: 'POST',
-    body: JSON.stringify({ anthropicApiKey }),
-  });
+// --- Model Management ---
+export async function getModelStatus() {
+  return request<{
+    status: string;
+    isDownloaded: boolean;
+    isLoaded: boolean;
+    downloadProgress: number;
+  }>('/model/status');
 }
 
-export async function testAnthropic(apiKey?: string) {
-  return request<{ success: boolean; error?: string }>('/setup/test-anthropic', {
-    method: 'POST',
-    body: JSON.stringify({ apiKey }),
-  });
+export async function startModelDownload() {
+  return request<{ success: boolean; message?: string }>('/model/download', { method: 'POST' });
+}
+
+export async function loadModel() {
+  return request<{ success: boolean }>('/model/load', { method: 'POST' });
+}
+
+export async function testModel() {
+  return request<{ success: boolean; error?: string }>('/setup/test-model', { method: 'POST' });
 }
 
 // --- Permissions ---
@@ -121,7 +131,6 @@ export async function getPermissions() {
     requiredGranted: boolean;
     permissions: Permission[];
     services: { id: string; name: string; status: string }[];
-    apiKeys: { id: string; name: string; configured: boolean; masked?: string }[];
   }>('/permissions');
 }
 
@@ -334,7 +343,7 @@ export async function unblockUser(userId: string) {
 export interface ToolDefinition {
   name: string;
   description: string;
-  type: 'custom' | 'anthropic_server';
+  type: 'custom';
   enabled: boolean;
 }
 
@@ -399,14 +408,6 @@ export async function toggleTrigger(id: string) {
 
 export async function deleteTrigger(id: string) {
   return request<{ success: boolean }>(`/tools/triggers/${id}`, { method: 'DELETE' });
-}
-
-// --- Settings API Key ---
-export async function saveApiKey(value: string) {
-  return request<{ success: boolean }>('/settings/api-key', {
-    method: 'POST',
-    body: JSON.stringify({ key: 'ANTHROPIC_API_KEY', value }),
-  });
 }
 
 export async function openSettings(settingsUrl: string) {

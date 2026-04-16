@@ -219,9 +219,9 @@ export default function DashboardPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             { label: 'Version', value: status?.agent?.version || config?.app?.version || '—' },
-            { label: 'Model', value: config?.anthropic?.model || '—' },
+            { label: 'Model', value: config?.model?.name || 'Gemma 4 E4B' },
             { label: 'Platform', value: config?.app?.platform || '—' },
-            { label: 'API Key', value: config?.anthropic?.hasApiKey ? 'Configured' : 'Not set' },
+            { label: 'Inference', value: 'Local (on-device)' },
           ].map(({ label, value }) => (
             <div key={label}>
               <p className="text-[11px] font-medium text-[var(--color-text-tertiary)] uppercase tracking-wide">{label}</p>

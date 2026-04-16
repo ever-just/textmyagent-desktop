@@ -7,9 +7,7 @@ import crypto from 'crypto';
  * ToolRegistry — manages tool definitions, dispatch, and execution logging.
  * Phase 3, Task 3.1
  *
- * Supports two kinds of tools:
- * 1. Anthropic server-side tools (web_search, web_fetch) — executed by Anthropic, no local handler
- * 2. Custom tools — executed locally with registered handler functions
+ * All tools are custom tools executed locally with registered handler functions.
  */
 
 type ToolHandler = (input: Record<string, unknown>, context: ToolCallContext) => Promise<string>;
@@ -28,21 +26,10 @@ export class ToolRegistry {
   }
 
   /**
-   * Register built-in Anthropic server-side tool definitions.
-   * These don't have local handlers — Anthropic executes them.
+   * Register built-in tool definitions.
    */
-  private registerBuiltinDefinitions(): void {
-    this.definitions.set('web_search', {
-      name: 'web_search',
-      description: 'Search the web for current information',
-      type: 'anthropic_server',
-      enabled: true,
-      serverToolType: 'web_search_20250305',
-      maxUses: 3,
-    });
-
-    // Note: web_fetch uses the text_editor type in Anthropic's API
-    // but we model it as a server-side tool for our purposes
+  registerBuiltinDefinitions(): void {
+    // No built-in tools — all tools registered via registerCustomTool()
   }
 
   /**
@@ -55,38 +42,20 @@ export class ToolRegistry {
   }
 
   /**
-   * Get all tool definitions formatted for the Anthropic API.
-   * Only returns enabled tools whose settings toggle is on.
+   * Return all enabled tool definitions (used by LocalLLMService and dashboard).
    */
-  getAnthropicTools(): any[] {
-    const tools: any[] = [];
-
+  getEnabledDefinitions(): ToolDefinition[] {
+    const result: ToolDefinition[] = [];
     for (const [name, def] of this.definitions) {
       if (!def.enabled) continue;
       if (!this.isToolEnabledInSettings(name)) continue;
-
-      if (def.type === 'anthropic_server') {
-        // Server-side tool — use Anthropic's format
-        tools.push({
-          type: def.serverToolType,
-          name: def.name,
-          ...(def.maxUses ? { max_uses: def.maxUses } : {}),
-        });
-      } else if (def.type === 'custom' && def.inputSchema) {
-        // Custom tool — standard tool format
-        tools.push({
-          name: def.name,
-          description: def.description,
-          input_schema: def.inputSchema,
-        });
-      }
+      result.push(def);
     }
-
-    return tools;
+    return result;
   }
 
   /**
-   * Execute a custom tool call. Server-side tools are handled by Anthropic.
+   * Execute a custom tool call.
    */
   async executeToolCall(toolCall: ToolCall, context: ToolCallContext): Promise<ToolResult> {
     const startTime = Date.now();
@@ -97,15 +66,6 @@ export class ToolRegistry {
         toolCallId: toolCall.id,
         content: `Unknown tool: ${toolCall.name}`,
         isError: true,
-      };
-    }
-
-    if (def.type === 'anthropic_server') {
-      // Server-side tools are handled by Anthropic — we should never reach here
-      return {
-        toolCallId: toolCall.id,
-        content: 'Server-side tool — handled by Anthropic',
-        isError: false,
       };
     }
 

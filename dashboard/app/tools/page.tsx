@@ -105,26 +105,14 @@ export default function ToolsPage() {
           {definitions.map((tool) => (
             <Card key={tool.name} padding="sm">
               <div className="flex items-start gap-3">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  tool.type === 'anthropic_server'
-                    ? 'bg-purple-100 dark:bg-purple-950/40'
-                    : 'bg-blue-100 dark:bg-blue-950/40'
-                }`}>
-                  <Wrench className={`w-4 h-4 ${
-                    tool.type === 'anthropic_server'
-                      ? 'text-purple-600 dark:text-purple-400'
-                      : 'text-blue-600 dark:text-blue-400'
-                  }`} />
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-blue-100 dark:bg-blue-950/40">
+                  <Wrench className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-[12px] font-semibold">{tool.name}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase ${
-                      tool.type === 'anthropic_server'
-                        ? 'bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400'
-                        : 'bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
-                    }`}>
-                      {tool.type === 'anthropic_server' ? 'Server' : 'Custom'}
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">
+                      Local
                     </span>
                     <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
                       tool.enabled

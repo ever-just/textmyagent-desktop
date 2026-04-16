@@ -75,15 +75,18 @@ vi.mock('../iMessageService', () => {
   };
 });
 
-vi.mock('../ClaudeService', () => ({
-  claudeService: {
+vi.mock('../LocalLLMService', () => ({
+  localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
+    initModel: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
-    setModel: vi.fn(),
     setMaxTokens: vi.fn(),
     setTemperature: vi.fn(),
+    setContextSize: vi.fn(),
     syncSettings: vi.fn(),
+    status: 'loaded',
+    isModelDownloaded: vi.fn().mockReturnValue(true),
   },
 }));
 
@@ -104,17 +107,15 @@ vi.mock('../MemoryService', () => ({
 
 vi.mock('../PromptBuilder', () => ({
   promptBuilder: {
-    buildWithCacheControl: vi.fn().mockReturnValue([
-      { type: 'text', text: 'system prompt' },
-    ]),
+    build: vi.fn().mockReturnValue('system prompt'),
   },
 }));
 
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
-    getAnthropicTools: vi.fn().mockReturnValue([
-      { name: 'react_to_message', description: 'Send tapback', input_schema: {} },
-      { name: 'wait', description: 'Skip response', input_schema: {} },
+    getEnabledDefinitions: vi.fn().mockReturnValue([
+      { name: 'react_to_message', description: 'Send tapback', inputSchema: {} },
+      { name: 'wait', description: 'Skip response', inputSchema: {} },
     ]),
     executeToolCall: vi.fn(),
     getDefinitions: vi.fn().mockReturnValue([]),
@@ -133,7 +134,7 @@ vi.mock('../RateLimiter', () => ({
 // ---------------------------------------------------------------------------
 import { AgentService } from '../AgentService';
 import { iMessageService } from '../iMessageService';
-import { claudeService } from '../ClaudeService';
+import { localLLMService } from '../LocalLLMService';
 import { messageFormatter } from '../MessageFormatter';
 import { rateLimiter } from '../RateLimiter';
 import { log } from '../../logger';
@@ -165,7 +166,7 @@ function defaultFormatMock() {
   }) as any);
 }
 
-function defaultClaudeResponse(content: string, toolsUsed: string[] = []) {
+function defaultLLMResponse(content: string, toolsUsed: string[] = []) {
   return {
     content,
     inputTokens: 100,
@@ -197,8 +198,8 @@ describe('Mass response prevention', () => {
   });
 
   it('should respond exactly ONCE per incoming message (no mass responses)', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('Got it!') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('Got it!') as any
     );
 
     const m = createMsg('Hey');
@@ -214,9 +215,9 @@ describe('Mass response prevention', () => {
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
 
-    vi.mocked(claudeService.generateResponse)
+    vi.mocked(localLLMService.generateResponse)
       .mockReturnValueOnce(firstPromise as any)
-      .mockResolvedValue(defaultClaudeResponse('Follow-up reply') as any);
+      .mockResolvedValue(defaultLLMResponse('Follow-up reply') as any);
 
     // Rapid-fire 5 messages from same user/chat
     const messages = Array.from({ length: 5 }, (_, i) => createMsg(`msg ${i + 1}`));
@@ -230,11 +231,11 @@ describe('Mass response prevention', () => {
       await (agent as any).handleIncomingMessage(messages[i]);
     }
 
-    // Only 1 Claude call so far (first message)
-    expect(vi.mocked(claudeService.generateResponse)).toHaveBeenCalledTimes(1);
+    // Only 1 LLM call so far (first message)
+    expect(vi.mocked(localLLMService.generateResponse)).toHaveBeenCalledTimes(1);
 
     // Release first
-    resolveFirst!(defaultClaudeResponse('First reply'));
+    resolveFirst!(defaultLLMResponse('First reply'));
     await vi.advanceTimersByTimeAsync(30000);
     await p1;
     await vi.advanceTimersByTimeAsync(30000);
@@ -257,8 +258,8 @@ describe('Mass response prevention', () => {
       .mockReturnValueOnce({ allowed: true } as any)
       .mockReturnValue({ allowed: false, reason: 'rate_limited' } as any);
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('OK') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('OK') as any
     );
 
     // Send 5 messages from different "GUIDs" (different chats to bypass per-chat lock)
@@ -270,7 +271,7 @@ describe('Mass response prevention', () => {
     }
 
     // Only 3 should have generated responses (before rate limit)
-    expect(vi.mocked(claudeService.generateResponse)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(localLLMService.generateResponse)).toHaveBeenCalledTimes(3);
 
     // Rate limit logged
     expect(log).toHaveBeenCalledWith(
@@ -282,7 +283,7 @@ describe('Mass response prevention', () => {
   it('should limit queued messages per chat to MAX_CHAT_QUEUE_SIZE (5)', async () => {
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
-    vi.mocked(claudeService.generateResponse).mockReturnValue(firstPromise as any);
+    vi.mocked(localLLMService.generateResponse).mockReturnValue(firstPromise as any);
 
     // First message acquires lock
     (agent as any).handleIncomingMessage(createMsg('first'));
@@ -303,7 +304,7 @@ describe('Mass response prevention', () => {
     );
 
     // Cleanup
-    resolveFirst!(defaultClaudeResponse('done'));
+    resolveFirst!(defaultLLMResponse('done'));
     await vi.advanceTimersByTimeAsync(10000);
   });
 });
@@ -335,7 +336,7 @@ describe('Agent restart — stale message filtering', () => {
     const m = createMsg('Hello?');
     await (agent as any).handleIncomingMessage(m);
 
-    expect(claudeService.generateResponse).not.toHaveBeenCalled();
+    expect(localLLMService.generateResponse).not.toHaveBeenCalled();
     expect(iMessageService.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -374,10 +375,10 @@ describe('Agent restart — stale message filtering', () => {
     ] as any);
 
     const capturedMessages: any[] = [];
-    vi.mocked(claudeService.generateResponse).mockImplementation(
+    vi.mocked(localLLMService.generateResponse).mockImplementation(
       async (_text: any, messages: any) => {
         capturedMessages.push(...(messages || []));
-        return defaultClaudeResponse('Hi!');
+        return defaultLLMResponse('Hi!');
       }
     );
 
@@ -394,8 +395,8 @@ describe('Agent restart — stale message filtering', () => {
   });
 
   it('should respond to the most recent message after restart', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('Welcome back!') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('Welcome back!') as any
     );
 
     // Agent processes the new message that triggered the restart
@@ -404,9 +405,9 @@ describe('Agent restart — stale message filtering', () => {
     await vi.advanceTimersByTimeAsync(10000);
     await p;
 
-    // Verify Claude was called with the most recent text
-    expect(vi.mocked(claudeService.generateResponse)).toHaveBeenCalledTimes(1);
-    const callArgs = vi.mocked(claudeService.generateResponse).mock.calls[0];
+    // Verify LLM was called with the most recent text
+    expect(vi.mocked(localLLMService.generateResponse)).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(localLLMService.generateResponse).mock.calls[0];
     expect(callArgs[0]).toBe('Are you back?');
 
     expect(iMessageService.sendMessage).toHaveBeenCalledWith(
@@ -431,8 +432,8 @@ describe('Agent restart — stale message filtering', () => {
 
   it('should build fresh conversation context on restart (no leftover state)', async () => {
     // Simulate first session with context
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('First session reply') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('First session reply') as any
     );
 
     const m1 = createMsg('Question 1');
@@ -448,8 +449,8 @@ describe('Agent restart — stale message filtering', () => {
     // Clear conversations to simulate fresh start
     (agent as any).conversations.clear();
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('Fresh start reply') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('Fresh start reply') as any
     );
 
     // New message after restart
@@ -467,9 +468,9 @@ describe('Agent restart — stale message filtering', () => {
 });
 
 // ============================================================================
-// 3. TOOL CALL END-TO-END — ClaudeService agentic loop
+// 3. TOOL CALL END-TO-END — LocalLLMService agentic loop
 // ============================================================================
-describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
+describe('Tool call end-to-end (LocalLLMService agentic loop)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(_settings)) delete _settings[key];
@@ -477,13 +478,13 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
   });
 
   it('should process tool_use → tool_result → final text response', async () => {
-    // This tests the core Anthropic agentic loop pattern:
-    // Call 1: Claude says "I'll search for that" + tool_use block
-    // Call 2: Claude receives tool_result, responds with final text
+    // This tests the core agentic loop pattern:
+    // Call 1: LLM says "I'll search for that" + tool_use block
+    // Call 2: LLM receives tool_result, responds with final text
 
-    const { ClaudeService } = await vi.importActual<any>('../ClaudeService');
+    const { LocalLLMService } = await vi.importActual<any>('../LocalLLMService');
 
-    // We can't easily test the real ClaudeService without an API key,
+    // We can't easily test the real LocalLLMService without a model,
     // so we verify the logic flow by checking that the agentic loop in
     // AgentService correctly passes tool results back.
 
@@ -511,7 +512,7 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
     const agent = new AgentService();
     (agent as any).isRunning = true;
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'The weather in NYC is 72°F and sunny.',
       inputTokens: 250,
       outputTokens: 45,
@@ -556,7 +557,7 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
       'Fourth is Cafe Provence, French bistro fare. ' +
       'Fifth is Mariscos del Mar, authentic Mexican seafood.';
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: longToolResponse,
       inputTokens: 500,
       outputTokens: 120,
@@ -595,7 +596,7 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
     (agent as any).isRunning = true;
 
     // Tool call results in wait — agent decides not to respond
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: '',
       inputTokens: 100,
       outputTokens: 30,
@@ -621,8 +622,8 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
     const agent = new AgentService();
     (agent as any).isRunning = true;
 
-    // Claude used a tool and then provided a text response
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    // LLM used a tool and then provided a text response
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'I found it! The store closes at 9pm tonight.',
       inputTokens: 200,
       outputTokens: 40,
@@ -635,7 +636,7 @@ describe('Tool call end-to-end (ClaudeService agentic loop)', () => {
     await vi.advanceTimersByTimeAsync(10000);
     await p;
 
-    // The response text comes AFTER tools ran (Claude processed the tool result)
+    // The response text comes AFTER tools ran (LLM processed the tool result)
     expect(iMessageService.sendMessage).toHaveBeenCalledWith(
       'iMessage;-;+15559876543',
       'I found it! The store closes at 9pm tonight.'
@@ -671,7 +672,7 @@ describe('Tool call UX — typing indicator during processing', () => {
   });
 
   it('should apply typing delay even after tool calls (user sees "typing" indicator)', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'The answer is 42.',
       inputTokens: 200,
       outputTokens: 20,
@@ -693,7 +694,7 @@ describe('Tool call UX — typing indicator during processing', () => {
   });
 
   it('should log response metadata including tool info and timing', async () => {
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Found it!',
       inputTokens: 180,
       outputTokens: 15,
@@ -744,8 +745,8 @@ describe('Audio/dictation message handling', () => {
     // When a user sends an audio message via dictation, iOS transcribes it
     // and the text field contains the transcription. The agent should handle
     // it exactly like any other text message.
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('Sure, I can help with that!') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('Sure, I can help with that!') as any
     );
 
     // Dictated messages look like normal text messages after transcription
@@ -754,8 +755,8 @@ describe('Audio/dictation message handling', () => {
     await vi.advanceTimersByTimeAsync(10000);
     await p;
 
-    expect(claudeService.generateResponse).toHaveBeenCalledTimes(1);
-    const callArgs = vi.mocked(claudeService.generateResponse).mock.calls[0];
+    expect(localLLMService.generateResponse).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(localLLMService.generateResponse).mock.calls[0];
     expect(callArgs[0]).toBe('Hey can you look up the best pizza place near me');
 
     expect(iMessageService.sendMessage).toHaveBeenCalledWith(
@@ -768,8 +769,8 @@ describe('Audio/dictation message handling', () => {
     // On newer macOS, the text field may be empty and the message is in
     // attributedBody. The iMessageService.extractTextFromAttributedBody()
     // extracts the text. Once extracted, it flows through the same pipeline.
-    vi.mocked(claudeService.generateResponse).mockResolvedValue(
-      defaultClaudeResponse('The nearest store is 2 miles away.') as any
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue(
+      defaultLLMResponse('The nearest store is 2 miles away.') as any
     );
 
     // The message arrives with text already extracted from attributedBody
@@ -808,7 +809,7 @@ describe('Audio/dictation message handling', () => {
       'Can you help me figure out the best time to go and maybe suggest some good hotels that are not too expensive but still nice. ' +
       'Also I want to know about the train system there and if I need to book tickets in advance or if I can just buy them at the station.';
 
-    vi.mocked(claudeService.generateResponse).mockResolvedValue({
+    vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Great idea! Here is what I recommend for your Italy trip. ' +
         'The best time to visit is May or September - fewer crowds and pleasant weather. ' +
         'For hotels, I suggest looking at boutique hotels in the centro storico areas. ' +
@@ -879,9 +880,9 @@ describe('Tapback filtering at iMessageService level', () => {
 // ============================================================================
 describe('Agentic loop safety', () => {
   it('should respect maxApiCalls setting to prevent infinite tool loops', () => {
-    // The ClaudeService agentic loop has a safety bound:
+    // The LocalLLMService agentic loop has a safety bound:
     // while (apiCallCount < maxApiCalls) { ... }
-    // Default is 6, meaning max 6 Claude API calls per user message
+    // Default is 6, meaning max 6 LLM calls per user message
     const defaultMax = 6;
 
     // Verify the setting exists and the loop would terminate
@@ -890,11 +891,11 @@ describe('Agentic loop safety', () => {
   });
 
   it('should stop including tools on last API call (prevents dangling tool_use)', () => {
-    // In ClaudeService line 139:
+    // In LocalLLMService:
     // if (tools.length > 0 && apiCallCount < maxApiCalls) {
     //   requestParams.tools = tools;
     // }
-    // On the LAST call, tools are omitted so Claude can't request more tool calls.
+    // On the LAST call, tools are omitted so the LLM can't request more tool calls.
     // This prevents infinite loops.
 
     // Simulate: with maxApiCalls=3, on call #3, tools should NOT be included

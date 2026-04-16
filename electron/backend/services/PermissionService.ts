@@ -245,7 +245,6 @@ class PermissionServiceClass {
     // Validate URL against allowlist to prevent opening arbitrary URLs/protocols (fixes A6)
     const ALLOWED_PREFIXES = [
       'x-apple.systempreferences:',
-      'https://console.anthropic.com/',
     ];
     if (!ALLOWED_PREFIXES.some(prefix => settingsUrl.startsWith(prefix))) {
       log('warn', 'Blocked openSystemSettings for non-allowed URL', { url: settingsUrl });

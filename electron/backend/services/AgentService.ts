@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
 import { iMessageService, IMessage } from './iMessageService';
-import { claudeService, Message } from './ClaudeService';
+import { localLLMService, Message } from './LocalLLMService';
 import { log, logSecurityEvent } from '../logger';
 import { getDatabase, getSetting, getSettingInt, getSettingFloat } from '../database';
 import { rateLimiter } from './RateLimiter';
@@ -64,13 +64,18 @@ export class AgentService extends EventEmitter {
     log('info', 'Starting AI agent...');
 
     // Always sync settings from database (model, maxTokens, temperature)
-    claudeService.syncSettings();
+    localLLMService.syncSettings();
 
-    // Check if Claude is configured
-    if (!claudeService.isConfigured()) {
-      claudeService.refreshClient();
-      if (!claudeService.isConfigured()) {
-        log('error', 'Cannot start agent: Anthropic API key not configured');
+    // Ensure local model is loaded
+    if (!localLLMService.isConfigured()) {
+      try {
+        await localLLMService.initModel();
+      } catch {
+        log('error', 'Cannot start agent: Local model not loaded');
+        return false;
+      }
+      if (!localLLMService.isConfigured()) {
+        log('error', 'Cannot start agent: Local model not available');
         return false;
       }
     }
@@ -298,7 +303,7 @@ export class AgentService extends EventEmitter {
       }
 
       // Generate AI response (Phase 3: pass tool context + prompt context)
-      const response = await claudeService.generateResponse(
+      const response = await localLLMService.generateResponse(
         message.text,
         context.messages.slice(0, -1), // Exclude the current message (it's passed separately)
         undefined, // systemPrompt — use PromptBuilder default
@@ -395,7 +400,7 @@ export class AgentService extends EventEmitter {
           log('error', 'Failed to send response');
         }
       } else {
-        log('error', 'No response generated from Claude');
+        log('error', 'No response generated from local LLM');
       }
 
       // Note: Mark as read requires Private API, skipping
@@ -523,59 +528,28 @@ export class AgentService extends EventEmitter {
   }
 
   /**
-   * Budget circuit breaker (Phase 1, task 1.3).
-   * Checks today's total token usage against the daily budget.
-   * Returns true if budget is exceeded.
+   * Budget check — enforces a daily token cap for local inference.
+   * Setting value 0 = unlimited.
    */
   private isBudgetExceeded(): boolean {
     try {
-      const dailyBudgetCents = getSettingInt('security.dailyBudgetCents', 0); // 0 = no limit
-      if (dailyBudgetCents <= 0) return false;
+      const dailyTokenBudget = getSettingInt('security.dailyBudgetCents', 0);
+      if (dailyTokenBudget <= 0) return false;
 
       const db = getDatabase();
       const today = new Date().toISOString().split('T')[0];
       const row = db.prepare(
-        'SELECT SUM(input_tokens) as inputTokens, SUM(output_tokens) as outputTokens FROM api_usage WHERE date = ?'
-      ).get(today) as { inputTokens: number | null; outputTokens: number | null } | undefined;
+        'SELECT SUM(total_tokens) as totalTokens FROM api_usage WHERE date = ?'
+      ).get(today) as { totalTokens: number | null } | undefined;
 
-      if (!row || (!row.inputTokens && !row.outputTokens)) return false;
-
-      const inputTokens = row.inputTokens || 0;
-      const outputTokens = row.outputTokens || 0;
-
-      // Per-model cost calculation ($/1M tokens → cents/1M tokens)
-      const MODEL_COST: Record<string, { input: number; output: number }> = {
-        'claude-haiku-4-5-20251001':  { input: 80,   output: 400  },
-        'claude-sonnet-4-5-20250929': { input: 300,  output: 1500 },
-        'claude-sonnet-4-20250514':   { input: 300,  output: 1500 },
-        'claude-sonnet-4-6':          { input: 300,  output: 1500 },
-        'claude-opus-4-6':            { input: 1500, output: 7500 },
-      };
-      const DEFAULT_COST = { input: 300, output: 1500 };
-
-      let model = 'claude-haiku-4-5-20251001';
-      try {
-        const raw = getSetting('anthropic.model');
-        if (raw) model = JSON.parse(raw);
-      } catch { /* use default */ }
-
-      const cost = MODEL_COST[model] || DEFAULT_COST;
-      const costCents = (inputTokens / 1_000_000) * cost.input + (outputTokens / 1_000_000) * cost.output;
-
-      if (costCents >= dailyBudgetCents) {
-        log('warn', 'Daily budget exceeded', {
-          costCents: Math.round(costCents * 100) / 100,
-          dailyBudgetCents,
-          inputTokens,
-          outputTokens,
-        });
+      const totalTokens = row?.totalTokens || 0;
+      if (totalTokens >= dailyTokenBudget) {
+        log('warn', 'Daily token budget exceeded', { dailyTokenBudget, totalTokens });
         return true;
       }
-
       return false;
-    } catch (error: any) {
-      log('error', 'Budget check failed', { error: error.message });
-      return false; // Allow through on error rather than blocking
+    } catch {
+      return false;
     }
   }
 

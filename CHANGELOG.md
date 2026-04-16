@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Multi-language support
 
+## [2.2.0] - 2026-04-15
+
+### Added
+- **Local LLM migration** — Replaced Anthropic Claude API with local Gemma 4 E4B model via `node-llama-cpp`. All inference now runs on-device.
+- **Onboarding flow** — New 4-step gated stepper (Welcome → Permissions → Model Download → Launch) with real-time permission polling and auto-download.
+- **Model management UI** — Settings page now shows read-only model info card, live status badge, and action buttons (Download, Load, Re-download).
+- **GPU Layers setting** — Configurable GPU layer offloading (`-1` = auto, `0` = CPU only) with live propagation and `setGpuLayers()` API.
+- **`getSettingValue()` function** — Added missing database helper that was causing silent settings sync failures.
+
+### Fixed
+- **[C1] Unbounded tool loop** — `maxToolLoops` setting is now enforced inside tool handlers; tool calls beyond the limit return an error message instead of executing.
+- **[C2] Budget system semantic mismatch** — Replaced stale Anthropic Haiku pricing with token-based budget enforcement. `isBudgetExceeded()` now queries actual token usage from `api_usage` table.
+- **[C3] Skip-to-Dashboard redirect loop** — "Skip to Dashboard" now sets a `localStorage` flag; layout guard respects it. Flag clears when setup completes.
+- **[H1+H2] `syncSettings()` safety** — Replaced `dynamic require()` + `Number()` with statically-imported `getSettingInt`/`getSettingFloat` helpers that have NaN guards.
+- **[H3] Download polling interval leaks** — Both setup and settings pages now store polling intervals in `useRef` with cleanup on unmount.
+- **[H4] `gpuLayers` not propagated on save** — Added `setGpuLayers()` to `LocalLLMService` and wired it into the `/config` PUT handler.
+- **[H5] No UI feedback for reload-required settings** — Context size and GPU layers inputs now show "Requires model reload" hint.
+- **[H6] Empty catch blocks** — Replaced silent error swallowing with `console.error` / `log()` calls in permission actions and `syncSettings()`.
+- **[M1] Duplicate `getSettingValue`** — Removed local copy in `dashboard.ts` route handler; now imports from `database.ts`.
+- **[M4] Vacuous truth on permissions** — `allRequiredGranted` now requires `requiredPermissions.length > 0` to prevent premature button enabling.
+- **[M5] Stale `apiKeys` type** — Removed from `getPermissions` response type and deleted dead API Keys section from permissions page.
+- **[M6] Dead `model` state** — Removed unused `model` state variable from settings page (model name is now read-only).
+- **[M7] No-op Tailwind class** — Removed `duration-300` from setup step containers (animation duration is defined in CSS).
+- **[L3] `any` types in permission filtering** — Replaced with proper `Permission` type import.
+
+### Removed
+- **Anthropic Claude integration** — `ClaudeService.ts` deleted; all references to API keys and cloud pricing removed.
+
+### Technical
+- TypeScript strict mode passes with 0 errors (Electron + Dashboard)
+- 155 unit tests passing across 7 test files
+- Full audit findings documented in `docs/CODEX_AUDIT_FINDINGS.md`
+
 ## [2.1.0] - 2026-04-07
 
 ### Added
