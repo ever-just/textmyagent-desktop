@@ -48,10 +48,12 @@ jobs:
         run: cd dashboard && npm ci
 
       - name: Build custom llama.cpp for Gemma 4
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx --no node-llama-cpp source download --release latest
+          # Clone llama.cpp directly (avoids GitHub API rate limits)
+          LLAMA_DIR="node_modules/node-llama-cpp/llama/localBuilds/llama.cpp"
+          rm -rf "$LLAMA_DIR"
+          mkdir -p "$(dirname "$LLAMA_DIR")"
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
           npx --no node-llama-cpp source build --gpu metal
 
       - name: Build app
