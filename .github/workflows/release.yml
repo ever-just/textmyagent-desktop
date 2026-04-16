@@ -81,13 +81,14 @@ jobs:
 
   build-mac-x64:
     needs: test
-    runs-on: macos-13  # Intel runner
+    runs-on: macos-14  # ARM64 runner — builds x64 via Rosetta 2
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          architecture: x64  # installs x64 Node.js (runs under Rosetta)
           cache: npm
 
       - name: Install dependencies
