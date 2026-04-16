@@ -48,6 +48,8 @@ jobs:
         run: cd dashboard && npm ci
 
       - name: Build custom llama.cpp for Gemma 4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx --no node-llama-cpp source download --release latest
           npx --no node-llama-cpp source build --gpu metal
@@ -93,6 +95,8 @@ jobs:
         run: cd dashboard && npm ci
 
       - name: Build custom llama.cpp for Gemma 4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx --no node-llama-cpp source download --release latest
           npx --no node-llama-cpp source build
