@@ -118,20 +118,19 @@ export class LocalLLMService {
       const downloader = await createModelDownloader({
         modelUri: 'hf:ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M',
         dirPath: modelsDir,
+        showCliProgress: false,
+        onProgress: (status: { downloadedSize: number; totalSize: number }) => {
+          const percent = Math.round((status.downloadedSize / status.totalSize) * 100);
+          const downloadedMB = status.downloadedSize / 1024 / 1024;
+          const totalMB = status.totalSize / 1024 / 1024;
+          this._downloadProgress = percent;
+          onProgress?.(percent, downloadedMB, totalMB);
+        },
       });
 
       log('info', 'Starting model download', {
-        modelFile: downloader.modelFileName,
+        modelFile: downloader.entrypointFilename,
         totalSize: `${(downloader.totalSize / 1024 / 1024).toFixed(0)} MB`,
-      });
-
-      // Track progress
-      downloader.onProgress((status: { downloadedSize: number; totalSize: number }) => {
-        const percent = Math.round((status.downloadedSize / status.totalSize) * 100);
-        const downloadedMB = status.downloadedSize / 1024 / 1024;
-        const totalMB = status.totalSize / 1024 / 1024;
-        this._downloadProgress = percent;
-        onProgress?.(percent, downloadedMB, totalMB);
       });
 
       const modelPath = await downloader.download();
