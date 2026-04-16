@@ -189,15 +189,25 @@ export class LocalLLMService {
       const { getLlama } = await this.getLlamaModule();
 
       log('info', 'Initializing llama.cpp engine...');
-      // Custom-built llama.cpp (b8808+) supports Gemma 4 architecture.
-      // Try Metal first (Apple Silicon); fall back to auto (Intel Macs / no Metal).
+      // Use "lastBuild" to load the custom-compiled llama.cpp binary that supports
+      // Gemma 4. Inside an asar-packaged Electron app, getLlama({ gpu: 'metal' })
+      // cannot resolve the custom build folder name (the cloned llama.cpp repo info
+      // is stripped from the asar) and falls back to the prebuilt binary which lacks
+      // Gemma 4 support. "lastBuild" reads lastBuild.json directly and loads the
+      // correct binary.
       try {
-        this.llama = await getLlama({ gpu: 'metal', debug: !!process.env.NODE_LLAMA_CPP_DEBUG });
-        log('info', 'llama.cpp initialized with Metal GPU');
-      } catch (metalErr: any) {
-        log('warn', 'Metal GPU init failed, falling back to auto', { error: metalErr.message });
-        this.llama = await getLlama({ debug: !!process.env.NODE_LLAMA_CPP_DEBUG });
-        log('info', 'llama.cpp initialized with auto GPU detection');
+        this.llama = await getLlama('lastBuild', { debug: true });
+        log('info', 'llama.cpp initialized via lastBuild');
+      } catch (lastBuildErr: any) {
+        log('warn', 'lastBuild init failed, trying Metal GPU', { error: lastBuildErr.message });
+        try {
+          this.llama = await getLlama({ gpu: 'metal', debug: true });
+          log('info', 'llama.cpp initialized with Metal GPU');
+        } catch (metalErr: any) {
+          log('warn', 'Metal GPU init failed, falling back to auto', { error: metalErr.message });
+          this.llama = await getLlama({ debug: true });
+          log('info', 'llama.cpp initialized with auto GPU detection');
+        }
       }
 
       // Resolve model path
@@ -219,13 +229,19 @@ export class LocalLLMService {
 
       this.modelPath = modelPath;
 
-      log('info', 'Loading local LLM model...', { modelPath });
+      log('info', 'Loading local LLM model...', { modelPath, fileSize: fs.statSync(modelPath).size });
 
-      const loadOpts: Record<string, any> = { modelPath };
+      const loadOpts: Record<string, any> = {
+        modelPath,
+        // Disable mmap to avoid SIGBUS / KERN_MEMORY_ERROR in Electron hardened runtime.
+        // Without this, macOS can invalidate the memory-mapped model file under certain conditions.
+        useMmap: false,
+      };
       if (this.gpuLayers !== -1) {
         loadOpts.gpuLayers = this.gpuLayers;
       }
       const loadStart = Date.now();
+      log('info', 'loadModel options', loadOpts);
       this.model = await this.llama.loadModel(loadOpts);
       log('info', 'Model binary loaded', { durationMs: Date.now() - loadStart });
 
@@ -342,15 +358,21 @@ export class LocalLLMService {
     const maxToolLoops = getSettingInt('security.maxApiCallsPerMessage', 6);
     const toolsEnabled = getSettingBool('tools.enabled', true);
 
+    // Create a dedicated context per generation to avoid exhaustion.
+    // A shared context fills up after the first large response and subsequent
+    // requests fail with no output.
+    let perRequestContext: any = null;
+
     try {
       const { LlamaChatSession, defineChatSessionFunction } = await this.getLlamaModule();
 
       // Build system prompt
       const finalSystemPrompt = systemPrompt || promptBuilder.build(promptContext || { date: new Date().toLocaleString() });
 
-      // Create a fresh chat session for this request
+      // Create a fresh context + session for this request
+      perRequestContext = await this.model!.createContext({});
       const session = new LlamaChatSession({
-        contextSequence: this.context.getSequence(),
+        contextSequence: perRequestContext.getSequence(),
         systemPrompt: finalSystemPrompt,
       });
 
@@ -441,9 +463,12 @@ export class LocalLLMService {
         responsePreview: response.substring(0, 150) || '(empty)',
       });
 
-      // Dispose the session to free context sequence
+      // Dispose session + per-request context to free resources
       try {
         session.dispose?.();
+      } catch { /* non-fatal */ }
+      try {
+        await perRequestContext?.dispose?.();
       } catch { /* non-fatal */ }
 
       return {
@@ -454,7 +479,10 @@ export class LocalLLMService {
         toolsUsed,
       };
     } catch (error: any) {
-      log('error', 'Local LLM generation error', { error: error.message });
+      log('error', 'Local LLM generation error', { error: error.message, stack: error.stack });
+      try {
+        await perRequestContext?.dispose?.();
+      } catch { /* non-fatal */ }
       return null;
     }
   }
