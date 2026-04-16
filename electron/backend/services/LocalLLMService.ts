@@ -61,8 +61,11 @@ export class LocalLLMService {
 
   private async getLlamaModule(): Promise<any> {
     if (!this._llamaModule) {
-      // node-llama-cpp is ESM-only; use dynamic import from CommonJS
-      this._llamaModule = await import('node-llama-cpp');
+      // node-llama-cpp is ESM-only with top-level await.
+      // TypeScript compiles import() to require() in CommonJS mode,
+      // which fails for ESM modules. Use Function trick to preserve real import().
+      const dynamicImport = new Function('specifier', 'return import(specifier)');
+      this._llamaModule = await dynamicImport('node-llama-cpp');
     }
     return this._llamaModule;
   }
