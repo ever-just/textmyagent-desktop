@@ -229,9 +229,23 @@ export class LocalLLMService {
       this.model = await this.llama.loadModel(loadOpts);
       log('info', 'Model binary loaded', { durationMs: Date.now() - loadStart });
 
-      this.context = await this.model.createContext({
-        contextSize: this.contextSize,
-      });
+      // Let node-llama-cpp auto-detect optimal context size to avoid InsufficientMemoryError.
+      // Only specify contextSize if user explicitly set a non-default value.
+      const ctxOpts: Record<string, any> = {};
+      if (this.contextSize !== 8192) {
+        ctxOpts.contextSize = this.contextSize;
+      }
+      try {
+        this.context = await this.model.createContext(ctxOpts);
+      } catch (ctxErr: any) {
+        // If context creation fails (e.g. InsufficientMemoryError), retry with no constraints
+        if (ctxErr.name === 'InsufficientMemoryError' || ctxErr.message?.includes('memory')) {
+          log('warn', 'Context creation failed, retrying with auto settings', { error: ctxErr.message });
+          this.context = await this.model.createContext({});
+        } else {
+          throw ctxErr;
+        }
+      }
 
       this.initialized = true;
       this._status = 'loaded';
