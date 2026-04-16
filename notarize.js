@@ -15,15 +15,25 @@ exports.default = async function notarizing(context) {
 
   console.log(`Notarizing ${appPath}...`);
 
-  // Method 1: Keychain profile (fastest, recommended)
-  // Set up once via: xcrun notarytool store-credentials "textmyagent-notarize" \
-  //   --key ~/.appstoreconnect/private_keys/AuthKey_578PPBSM69.p8 \
-  //   --key-id 578PPBSM69 --issuer 858e0667-11ee-48aa-9e2e-c750c81d1361
-  const keychainProfile = process.env.KEYCHAIN_PROFILE || 'textmyagent-notarize';
-
   try {
-    console.log(`Using keychain profile: ${keychainProfile}`);
-    await notarize({ appPath, keychainProfile });
+    // CI: use App Store Connect API key (set via GitHub secrets)
+    if (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) {
+      console.log('Using App Store Connect API key for notarization (CI mode)');
+      await notarize({
+        appPath,
+        appleApiKey: process.env.APPLE_API_KEY,
+        appleApiKeyId: process.env.APPLE_API_KEY_ID,
+        appleApiIssuer: process.env.APPLE_API_ISSUER,
+      });
+    } else {
+      // Local: use keychain profile (fastest for dev machines)
+      // Set up once via: xcrun notarytool store-credentials "textmyagent-notarize" \
+      //   --key ~/.appstoreconnect/private_keys/AuthKey_578PPBSM69.p8 \
+      //   --key-id 578PPBSM69 --issuer 858e0667-11ee-48aa-9e2e-c750c81d1361
+      const keychainProfile = process.env.KEYCHAIN_PROFILE || 'textmyagent-notarize';
+      console.log(`Using keychain profile: ${keychainProfile}`);
+      await notarize({ appPath, keychainProfile });
+    }
     console.log('Notarization complete!');
   } catch (error) {
     console.error('Notarization failed:', error);
