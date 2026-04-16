@@ -18,7 +18,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
+        # --ignore-scripts skips native module compilation (node-mac-contacts, better-sqlite3)
+        # Tests mock all native modules, so compilation is not needed
 
       - name: Install dashboard dependencies
         run: cd dashboard && npm ci
