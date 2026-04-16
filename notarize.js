@@ -1,4 +1,6 @@
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 exports.default = async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context;
@@ -15,13 +17,20 @@ exports.default = async function notarizing(context) {
 
   console.log(`Notarizing ${appPath}...`);
 
+  let tempKeyFile = null;
+
   try {
     // CI: use App Store Connect API key (set via GitHub secrets)
     if (process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) {
       console.log('Using App Store Connect API key for notarization (CI mode)');
+
+      // APPLE_API_KEY is base64-encoded .p8 content — write to temp file
+      tempKeyFile = path.join(os.tmpdir(), `AuthKey_${process.env.APPLE_API_KEY_ID}.p8`);
+      fs.writeFileSync(tempKeyFile, Buffer.from(process.env.APPLE_API_KEY, 'base64'), { mode: 0o600 });
+
       await notarize({
         appPath,
-        appleApiKey: process.env.APPLE_API_KEY,
+        appleApiKey: tempKeyFile,
         appleApiKeyId: process.env.APPLE_API_KEY_ID,
         appleApiIssuer: process.env.APPLE_API_ISSUER,
       });
@@ -38,5 +47,10 @@ exports.default = async function notarizing(context) {
   } catch (error) {
     console.error('Notarization failed:', error);
     throw error;
+  } finally {
+    // Clean up temp key file
+    if (tempKeyFile && fs.existsSync(tempKeyFile)) {
+      fs.unlinkSync(tempKeyFile);
+    }
   }
 };
