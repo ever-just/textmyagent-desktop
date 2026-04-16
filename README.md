@@ -1,172 +1,122 @@
-# TextMyAgent Desktop
+<div align="center">
+  <img src="resources/icons/icon.png" alt="TextMyAgent" width="140" height="140" style="border-radius: 28px;">
+  <h1>TextMyAgent Desktop</h1>
+  <p><strong>AI Executive Assistant for macOS via iMessage</strong></p>
+  <p>Runs entirely on your Mac — no cloud, no API keys, no subscriptions.</p>
 
-<p align="center">
-  <img src="resources/icons/icon.png" alt="TextMyAgent Logo" width="128" height="128">
-</p>
+  <a href="https://github.com/ever-just/textmyagent-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/ever-just/textmyagent-desktop?style=flat-square&color=2563EB&label=latest" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2012%2B-000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/model-Gemma%204%20E4B-4285F4?style=flat-square&logo=google&logoColor=white" alt="Gemma">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/tests-155%20passing-brightgreen?style=flat-square" alt="Tests">
 
-<p align="center">
-  <strong>AI Executive Assistant for macOS via iMessage</strong>
-</p>
+  <br><br>
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#setup">Setup</a> •
-  <a href="#development">Development</a> •
-  <a href="#architecture">Architecture</a>
-</p>
+  <a href="#download">Download</a>&ensp;·&ensp;<a href="#features">Features</a>&ensp;·&ensp;<a href="#setup">Setup</a>&ensp;·&ensp;<a href="#development">Development</a>&ensp;·&ensp;<a href="#architecture">Architecture</a>
+</div>
 
 ---
 
-## Overview
+## Download
 
-TextMyAgent Desktop is a native macOS application that provides an AI-powered executive assistant (Grace) directly through your iMessage conversations. Built with Electron and powered by Anthropic's Claude, it runs entirely on your Mac with no cloud servers required.
+> All builds are code-signed with Developer ID. Right-click → Open on first launch.
+
+| Chip | Installer | Zip |
+|------|-----------|-----|
+| **Apple Silicon** (M1–M4) | [TextMyAgent-2.2.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-arm64.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-arm64-mac.zip) |
+| **Intel** | [TextMyAgent-2.2.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-mac.zip) |
+
+---
 
 ## Features
 
-- **🍎 Native iMessage Integration** - Reads and responds to messages directly from your Messages app
-- **🤖 Claude AI Powered** - Uses Anthropic's Claude (Haiku or Sonnet) for intelligent, context-aware responses
-- **🔒 Privacy First** - All data stays on your Mac in a local SQLite database
-- **📊 Dashboard** - Beautiful Next.js dashboard for monitoring and configuration
-- **⚡ Real-time** - 2-second polling for near-instant responses
-- **🧠 Memory System** - Remembers user facts and preferences across conversations with automatic expiration
-- **⏰ Reminders & Triggers** - Schedule reminders and create automation triggers via natural language
-- **👤 Contact Resolution** - Resolves phone numbers to real names via macOS Contacts
-- **🔐 Production Ready** - Hardened runtime, Developer ID code signing, and Apple notarization
-- **🔄 Auto-Update** - Built-in update checking with user-controlled downloads
+- **Native iMessage** — Reads and responds to messages directly from Messages.app
+- **On-Device AI** — Powered by Google's Gemma 4 E4B model via `node-llama-cpp`. Zero cloud dependency.
+- **Privacy First** — All data stays on your Mac in a local SQLite database
+- **Dashboard** — Beautiful Next.js control panel for monitoring and configuration
+- **Real-time** — 2-second polling for near-instant responses
+- **Memory** — Remembers user facts and preferences across conversations with auto-expiration
+- **Reminders & Triggers** — Schedule reminders and create automation triggers via natural language
+- **Contact Resolution** — Resolves phone numbers to real names via macOS Contacts
+- **GPU Accelerated** — Configurable GPU layer offloading for fast inference on Apple Silicon
+- **Auto-Update** — Built-in update checking with user-controlled downloads
+
+---
 
 ## Requirements
 
-| Requirement | Version |
+| Requirement | Minimum |
 |-------------|---------|
-| macOS | 12.0 (Monterey) or later |
-| Node.js | 20.x or later |
-| Architecture | Apple Silicon or Intel |
+| **macOS** | 12.0 (Monterey) |
+| **RAM** | 8 GB (16 GB recommended) |
+| **Disk** | ~4 GB (model download) |
+| **Architecture** | Apple Silicon or Intel |
 
-### Required Permissions
+### Permissions
 
 | Permission | Purpose |
 |------------|---------|
 | **Full Disk Access** | Read iMessage database (`~/Library/Messages/chat.db`) |
 | **Automation** | Send messages via Messages.app |
-| **Contacts** (optional) | Display contact names instead of phone numbers |
+| **Contacts** *(optional)* | Display contact names instead of phone numbers |
 
-## Download
-
-### macOS
-
-| Chip | Download |
-|------|----------|
-| **Apple Silicon** (M1/M2/M3) | [TextMyAgent-2.1.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.1.0/TextMyAgent-2.1.0-arm64.dmg) |
-| **Intel** | [TextMyAgent-2.1.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.1.0/TextMyAgent-2.1.0.dmg) |
-
-> Starting with v1.7.0, all builds are code-signed and notarized by Apple. You should be able to open the app directly without Gatekeeper warnings.
-
-## Installation
-
-### From Release
-
-1. Download the DMG for your Mac from the links above
-2. Open the DMG and drag TextMyAgent to Applications
-3. **Right-click** TextMyAgent and select **Open** (required for first launch)
-4. Follow the setup wizard
-
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/ever-just/textmyagent-desktop.git
-cd textmyagent-desktop
-
-# Install dependencies
-npm install
-cd dashboard && npm install && cd ..
-
-# Build the dashboard
-cd dashboard && npm run build && cd ..
-
-# Build Electron
-npm run build:electron
-
-# Package the app
-npm run package:mac
-```
+---
 
 ## Setup
 
-### 1. Grant Permissions
+1. **Download & install** — Drag TextMyAgent to Applications, right-click → Open
+2. **Grant permissions** — The setup wizard walks you through Full Disk Access, Automation, and Contacts
+3. **Download the model** — Gemma 4 E4B downloads automatically (~3.4 GB, one-time)
+4. **Launch** — The agent starts responding to your iMessages
 
-On first launch, you'll need to grant permissions:
+No API keys or accounts needed.
 
-1. **Full Disk Access** (Required)
-   - Open System Settings → Privacy & Security → Full Disk Access
-   - Click the + button and add TextMyAgent
-   - Restart TextMyAgent
+---
 
-2. **Automation** (Required)
-   - Will be prompted automatically when sending first message
-   - Enable "Messages" for TextMyAgent
-
-3. **Contacts** (Optional)
-   - Open System Settings → Privacy & Security → Contacts
-   - Enable TextMyAgent
-
-### 2. Configure API Key
-
-1. Get an API key from [Anthropic Console](https://console.anthropic.com/settings/keys)
-2. Open the TextMyAgent dashboard (click tray icon → Open Dashboard)
-3. Go to Settings and enter your API key
-
-### 3. Start the Agent
-
-The agent starts automatically. You can control it from the dashboard:
-- **Start/Stop** - Toggle agent on/off
-- **Restart** - Restart with fresh state
-
-## Usage
-
-Once configured, TextMyAgent will:
-
-1. Monitor your iMessage database for new incoming messages
-2. Process messages through Claude AI
-3. Send intelligent responses back via Messages.app
-4. Log all conversations to the local database
-
-### Dashboard Features
+## Dashboard
 
 | Page | Description |
 |------|-------------|
 | **Overview** | System status, agent state, quick stats |
-| **Messages** | View all conversations and message history |
-| **Users** | Manage contacts who have messaged you |
-| **Tools** | Manage AI tools, reminders, and automation triggers |
-| **Memory** | View and manage user facts, summaries, and knowledge |
+| **Messages** | Conversation history |
+| **Users** | Contact management |
+| **Tools** | AI tools, reminders, automation triggers |
+| **Memory** | User facts, summaries, knowledge base |
 | **Logs** | Real-time application logs |
-| **Usage** | API token usage and costs |
+| **Usage** | Token usage statistics |
 | **Security** | Rate limiting, budget controls, security events |
-| **Settings** | API keys, permissions, configuration |
+| **Settings** | Model config, persona, tools, memory, security |
+
+---
 
 ## Development
 
-### Commands
+### From Source
 
 ```bash
-# Development
-npm run dev                  # Run in development mode
+git clone https://github.com/ever-just/textmyagent-desktop.git
+cd textmyagent-desktop
 
-# Building
-npm run build:electron       # Compile TypeScript
-npm run package:mac          # Build macOS app
+npm install
+cd dashboard && npm install && cd ..
 
-# Dashboard
-cd dashboard
-npm run dev                  # Run dashboard dev server
-npm run build                # Build for production
+npm run dev          # development mode
+npm test             # run 155 tests
+npm run dist:mac     # build signed DMGs
 ```
 
-## Architecture
+### Commands
 
-### Message Flow
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Dev mode (dashboard + electron) |
+| `npm test` | Run test suite |
+| `npm run build` | Build dashboard + electron |
+| `npm run dist:mac` | Package signed macOS DMGs |
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
@@ -176,51 +126,57 @@ npm run build                # Build for production
                                                           │
                                                           ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Messages.app   │◀────│  AppleScript     │◀────│  ClaudeService  │
-│  (send)         │     │  (osascript)     │     │  (AI response)  │
+│  Messages.app   │◀────│  AppleScript     │◀────│  LocalLLMService│
+│  (send)         │     │  (osascript)     │     │  (Gemma 4 E4B)  │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
 ```
+
+### Stack
+
+| Layer | Technology |
+|-------|------------|
+| **Desktop** | Electron 39 |
+| **Dashboard** | Next.js 15, React 19, Tailwind CSS |
+| **AI** | Gemma 4 E4B via node-llama-cpp |
+| **Database** | better-sqlite3 |
+| **Contacts** | node-mac-contacts |
+
+---
 
 ## Building for Distribution
 
 ### Code Signing
 
-Builds are automatically signed with the Developer ID Application certificate. The signing identity is configured in `electron-builder.yml`.
+Builds are signed with Developer ID Application certificate. Identity configured in `electron-builder.yml`.
 
 ### Notarization
 
-Notarization uses a Keychain-stored credential profile. One-time setup:
-
 ```bash
-# Store credentials in Keychain (only needed once)
+# One-time: store credentials in Keychain
 xcrun notarytool store-credentials "textmyagent-notarize" \
   --key ~/.appstoreconnect/private_keys/AuthKey_YOURKEYID.p8 \
   --key-id YOURKEYID \
   --issuer YOUR-ISSUER-UUID
-```
 
-Then build with notarization:
-
-```bash
+# Build with notarization
 npm run dist:mac
-```
 
-To skip notarization during development:
-
-```bash
+# Skip notarization (dev builds)
 SKIP_NOTARIZATION=true npm run dist:mac
 ```
 
+---
+
 ## Troubleshooting
 
-### Agent Not Starting
-- Check Full Disk Access is enabled
-- Verify API key is configured
-- Check logs in dashboard
+| Issue | Fix |
+|-------|-----|
+| Agent not starting | Check Full Disk Access is enabled in System Settings |
+| Messages not sending | Check Automation permission for Messages.app |
+| Model won't load | Ensure ~4 GB free disk space; try Re-download in Settings |
+| Slow inference | Increase GPU Layers in Settings (requires model reload) |
 
-### Messages Not Sending
-- Check Automation permission for Messages
-- Verify Messages.app is signed into iMessage
+---
 
 ## License
 
