@@ -23,15 +23,18 @@ vi.mock('../../database', () => ({
 const mockExistsSync = vi.fn().mockReturnValue(false);
 const mockReaddirSync = vi.fn().mockReturnValue([]);
 const mockMkdirSync = vi.fn();
+const mockStatSync = vi.fn().mockReturnValue({ size: 1024 });
 vi.mock('fs', () => ({
   default: {
     existsSync: (...args: any[]) => mockExistsSync(...args),
     readdirSync: (...args: any[]) => mockReaddirSync(...args),
     mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+    statSync: (...args: any[]) => mockStatSync(...args),
   },
   existsSync: (...args: any[]) => mockExistsSync(...args),
   readdirSync: (...args: any[]) => mockReaddirSync(...args),
   mkdirSync: (...args: any[]) => mockMkdirSync(...args),
+  statSync: (...args: any[]) => mockStatSync(...args),
 }));
 
 // Mock electron

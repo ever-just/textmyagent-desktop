@@ -229,7 +229,9 @@ export class LocalLLMService {
 
       this.modelPath = modelPath;
 
-      log('info', 'Loading local LLM model...', { modelPath, fileSize: fs.statSync(modelPath).size });
+      let fileSize: number | undefined;
+      try { fileSize = fs.statSync(modelPath).size; } catch { /* non-fatal */ }
+      log('info', 'Loading local LLM model...', { modelPath, fileSize });
 
       const loadOpts: Record<string, any> = {
         modelPath,
