@@ -3,10 +3,11 @@ import crypto from 'crypto';
 import { iMessageService, IMessage } from './iMessageService';
 import { localLLMService, Message } from './LocalLLMService';
 import { log, logSecurityEvent } from '../logger';
-import { getDatabase, getSetting, getSettingInt, getSettingFloat } from '../database';
+import { getDatabase, getSetting, getSettingInt, getSettingFloat, getSettingBool } from '../database';
 import { rateLimiter } from './RateLimiter';
 import { messageFormatter } from './MessageFormatter';
 import { memoryService } from './MemoryService';
+import { metricsService } from './MetricsService';
 
 interface ConversationContext {
   chatGuid: string;
@@ -18,6 +19,8 @@ interface ConversationContext {
 // Max age for conversation context entries before eviction (1 hour)
 const CONVERSATION_TTL_MS = 60 * 60 * 1000;
 const MAX_CONVERSATIONS = 500;
+// Phase 3.1: conversations touched within this window skip history reload from iMessage DB
+const WARM_CONTEXT_MS = 10 * 60 * 1000; // 10 min
 
 export class AgentService extends EventEmitter {
   private isRunning = false;
@@ -28,6 +31,9 @@ export class AgentService extends EventEmitter {
   private static MAX_CHAT_QUEUE_SIZE = 5;
   private static MAX_API_CALLS_PER_MESSAGE = 6; // Phase 1, task 1.4: per-message cost cap
   private maxHistoryMessages = 20;
+  // Phase 4.2: guard against summarizing the same chat multiple times in parallel
+  // (e.g., if LRU eviction and idle TTL fire close together).
+  private summarizationInFlight: Set<string> = new Set();
 
   constructor() {
     super();
@@ -53,6 +59,89 @@ export class AgentService extends EventEmitter {
       log('error', 'iMessage error', { error: error.message });
       this.emit('error', error);
     });
+
+    // Phase 4.2: register auto-summarization handler on the LLM service.
+    // Runs whenever a session is evicted (LRU / idle TTL / manual) so the
+    // conversation's value is captured as a structured summary + facts
+    // before the KV cache is gone.
+    localLLMService.onSessionEvicted((chatGuid, reason) => {
+      // Fire-and-forget: don't block eviction on summarization
+      void this.summarizeEvictedSession(chatGuid, reason);
+    });
+  }
+
+  /**
+   * Phase 4.2: Summarize a conversation before/after its session is evicted.
+   * Uses raw transcript + a fresh LLM call — does NOT touch the evicted session's
+   * KV cache (which would pollute it).
+   * Resolves to the saved summary text, or null if nothing worth summarizing.
+   */
+  private async summarizeEvictedSession(chatGuid: string, reason: string): Promise<string | null> {
+    // Only run if auto-summarization is enabled in settings (default on)
+    if (!getSettingBool('memory.enableSummarization', true)) {
+      return null;
+    }
+
+    // Prevent duplicate summarization for the same chat
+    if (this.summarizationInFlight.has(chatGuid)) {
+      log('debug', 'Summarization already in flight for chat, skipping', { chatGuid, reason });
+      return null;
+    }
+
+    const ctx = this.conversations.get(chatGuid);
+    if (!ctx || ctx.messages.length < 4) {
+      log('debug', 'Skipping summarization — too little conversation to summarize', {
+        chatGuid, reason, messageCount: ctx?.messages.length ?? 0,
+      });
+      return null;
+    }
+
+    this.summarizationInFlight.add(chatGuid);
+    try {
+      const messagesToSummarize = ctx.messages.slice(-20); // last 20 turns
+      const transcript = messagesToSummarize
+        .map(m => `${m.role === 'user' ? ctx.userHandle : 'assistant'}: ${m.content}`)
+        .join('\n');
+
+      // Use the dedicated summarization API — it uses an ephemeral session
+      // (not the pool), no tools, its own system prompt, and a tight 30s timeout.
+      const result = await localLLMService.generateSummary(transcript);
+      if (!result || !result.content) {
+        log('warn', 'Summarization produced empty response', { chatGuid, reason });
+        return null;
+      }
+
+      const summary = result.content;
+
+      // Find the conversation DB id so we can save to the right row
+      const db = getDatabase();
+      const conv = db.prepare('SELECT id FROM conversations WHERE chat_guid = ?').get(chatGuid) as { id: string } | undefined;
+      if (!conv) {
+        log('debug', 'No DB conversation row for chat — skipping summary persist', { chatGuid });
+        return summary;
+      }
+
+      memoryService.saveSummary(conv.id, summary);
+      log('info', 'Auto-summary saved on eviction', {
+        chatGuid,
+        reason,
+        summaryLength: summary.length,
+        durationMs: result.durationMs,
+        messageCount: messagesToSummarize.length,
+        preview: summary.substring(0, 120),
+      });
+
+      return summary;
+    } catch (err) {
+      // Non-fatal: summarization errors must not break the agent
+      log('warn', 'Auto-summarization failed', {
+        chatGuid, reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    } finally {
+      this.summarizationInFlight.delete(chatGuid);
+    }
   }
 
   async start(): Promise<boolean> {
@@ -159,6 +248,7 @@ export class AgentService extends EventEmitter {
     if (!rateCheck.allowed) {
       log('warn', 'Message rate-limited', { handle: userHandle, reason: rateCheck.reason });
       logSecurityEvent('rate_limit_exceeded', userHandle, { reason: rateCheck.reason }, 'medium');
+      metricsService.recordEvent(chatGuid, 'rate_limited');
       return;
     }
 
@@ -170,11 +260,22 @@ export class AgentService extends EventEmitter {
 
     // Per-chat lock: only one message processed per chat at a time (fixes C1)
     if (this.chatLocks.has(chatGuid)) {
-      // Queue message instead of dropping it
+      // Queue message instead of dropping it.
+      // Phase 4.1: On overflow, drop the NEW incoming message rather than the oldest.
+      // Rationale: conversation coherence breaks badly if early context is silently
+      // discarded. A rejected incoming message is noticeable; a lost early question
+      // leaves the agent responding to phantom context.
       const queue = this.chatQueues.get(chatGuid) || [];
       if (queue.length >= AgentService.MAX_CHAT_QUEUE_SIZE) {
-        log('warn', 'Chat queue full, dropping oldest queued message', { chatGuid });
-        queue.shift();
+        log('warn', 'Chat queue full, dropping NEW incoming message to preserve context', {
+          chatGuid,
+          queueLength: queue.length,
+          droppedGuid: message.guid,
+          droppedPreview: (message.text || '').substring(0, 80),
+        });
+        metricsService.recordEvent(chatGuid, 'queue_dropped');
+        this.processingQueue.delete(message.guid);
+        return;
       }
       queue.push(message);
       this.chatQueues.set(chatGuid, queue);
@@ -192,11 +293,22 @@ export class AgentService extends EventEmitter {
         preview: message.text.substring(0, 100),
       });
 
-      // Always fetch recent history for time awareness context
-      const history = await iMessageService.getConversationHistory(chatGuid, 10);
-
-      // Get or create conversation context
+      // Phase 3.1: Skip iMessage DB history reload when conversation is already WARM
+      // (touched recently). Warm context means we still have prior messages in memory
+      // and the LLM session pool likely still has the KV cache hot too.
+      // Only cold conversations (new or >10 min idle) trigger the full history load.
       let context = this.conversations.get(chatGuid);
+      const isWarm = context && (Date.now() - context.lastActivity < WARM_CONTEXT_MS);
+
+      // Fetch iMessage history only when cold (saves ~100-300ms per warm message)
+      let history: IMessage[] = [];
+      if (!isWarm) {
+        history = await iMessageService.getConversationHistory(chatGuid, 10);
+      } else {
+        // Warm path: still grab 1 message for time-awareness accuracy
+        history = await iMessageService.getConversationHistory(chatGuid, 1);
+      }
+
       if (!context) {
         context = {
           chatGuid,
@@ -245,6 +357,15 @@ export class AgentService extends EventEmitter {
             }
           }
         }
+        log('debug', 'Cold-start: loaded conversation history from iMessage', {
+          chatGuid,
+          messagesLoaded: context.messages.length,
+        });
+      } else if (isWarm) {
+        log('debug', 'Warm conversation: reusing in-memory context (skipped full history reload)', {
+          chatGuid,
+          messageCount: context.messages.length,
+        });
       }
 
       // Add user message to context
@@ -279,6 +400,19 @@ export class AgentService extends EventEmitter {
       // Contact name resolution — normalize phone to last 10 digits for display (task 2.4)
       const contactName = this.normalizeContactName(userHandle);
 
+      // Auto-save resolved contact name as a user fact if it's a real name (not a phone number)
+      if (contactName && contactName !== userHandle && !/^[\d\s()+-]+$/.test(contactName)) {
+        try {
+          const factContent = `Name is ${contactName}`;
+          const existingFacts = memoryService.getUserFacts(userHandle);
+          const alreadySaved = existingFacts.some((f) => f.content === factContent);
+          if (!alreadySaved) {
+            memoryService.saveFact(userHandle, factContent, 'preference', 'contact_lookup', 1.0);
+            log('info', 'Auto-saved contact name as user fact', { handle: userHandle, contactName });
+          }
+        } catch { /* non-fatal */ }
+      }
+
       // Group chat detection (task 3.12) — group chatGuids contain multiple participants
       const isGroupChat = chatGuid.includes(';chat');
       const chatType: 'group' | 'individual' = isGroupChat ? 'group' : 'individual';
@@ -302,14 +436,53 @@ export class AgentService extends EventEmitter {
         dateContext += ` (last message in this chat: ${timeSinceLastMsg})`;
       }
 
+      // Phase 5.3: Load most recent conversation summary for cold-start context.
+      // When a returning user messages after their session was evicted, the summary
+      // gives the LLM structural recall of the prior conversation without needing to
+      // prefill the full message history.
+      let conversationSummary: string | null = null;
+      if (!isWarm) {
+        try {
+          const db = getDatabase();
+          const conv = db.prepare('SELECT id FROM conversations WHERE chat_guid = ?').get(chatGuid) as { id: string } | undefined;
+          if (conv) {
+            const latest = memoryService.getLatestSummary(conv.id);
+            if (latest) {
+              conversationSummary = latest.summary;
+              log('debug', 'Loaded conversation summary for cold-start', {
+                chatGuid,
+                summaryLength: conversationSummary.length,
+              });
+            }
+          }
+        } catch (err) {
+          log('debug', 'Failed to load conversation summary (non-fatal)', {
+            chatGuid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       // Generate AI response (Phase 3: pass tool context + prompt context)
-      const response = await localLLMService.generateResponse(
+      let response = await localLLMService.generateResponse(
         message.text,
         context.messages.slice(0, -1), // Exclude the current message (it's passed separately)
         undefined, // systemPrompt — use PromptBuilder default
-        { date: dateContext, contactName, userFacts, chatType },
+        { date: dateContext, contactName, userFacts, chatType, conversationSummary: conversationSummary ?? undefined },
         { userId: userHandle, chatGuid }
       );
+
+      // Retry once if first attempt failed (context may have been recycled after error)
+      if (!response) {
+        log('warn', 'LLM returned null, retrying once...', { chatGuid, from: userHandle });
+        response = await localLLMService.generateResponse(
+          message.text,
+          context.messages.slice(0, -1),
+          undefined,
+          { date: dateContext, contactName, userFacts, chatType, conversationSummary: conversationSummary ?? undefined },
+          { userId: userHandle, chatGuid }
+        );
+      }
 
       // If agent called 'wait' tool, skip sending a text response entirely
       if (response && response.toolsUsed?.includes('wait')) {
@@ -322,8 +495,12 @@ export class AgentService extends EventEmitter {
           durationMs: response.durationMs,
           userMessagePreview: message.text.substring(0, 80),
         });
+        if (response.durationMs) {
+          metricsService.recordLatency(response.durationMs, isWarm ? 'warm' : 'cold', response.toolsUsed?.length || 0);
+        }
+        metricsService.recordEvent(chatGuid, 'wait');
         // Save user message to DB even if we didn't respond
-        this.saveMessageToDb(chatGuid, userHandle, message.text, '');
+        this.saveMessageToDb(chatGuid, userHandle, message.text, '', contactName);
         return;
       }
 
@@ -338,17 +515,16 @@ export class AgentService extends EventEmitter {
           outputTokens: response.outputTokens,
           durationMs: response.durationMs,
         });
-        this.saveMessageToDb(chatGuid, userHandle, message.text, '');
+        if (response.durationMs) {
+          metricsService.recordLatency(response.durationMs, isWarm ? 'warm' : 'cold', response.toolsUsed?.length || 0);
+        }
+        metricsService.recordEvent(chatGuid, 'tool_only');
+        this.saveMessageToDb(chatGuid, userHandle, message.text, '', contactName);
         return;
       }
 
       if (response && response.content) {
-        // Simulate typing indicator: add a brief human-like delay before sending
-        const responseLen = response.content.length;
-        const minDelayMs = 200;
-        const maxDelayMs = 1000;
-        const typingDelayMs = Math.min(maxDelayMs, Math.max(minDelayMs, responseLen * 8));
-        await new Promise((resolve) => setTimeout(resolve, typingDelayMs));
+        const typingDelayMs = 0; // Removed for responsiveness — inference already provides natural delay
 
         // Detect if user asked for links/URLs
         const userAskedForLinks = /\b(link|url|website|source|http)\b/i.test(message.text);
@@ -388,7 +564,13 @@ export class AgentService extends EventEmitter {
           });
 
           // Save to database
-          this.saveMessageToDb(chatGuid, userHandle, message.text, fullResponse);
+          this.saveMessageToDb(chatGuid, userHandle, message.text, fullResponse, contactName);
+
+          // Phase 5.4: record metrics for successful response
+          if (response.durationMs) {
+            metricsService.recordLatency(response.durationMs, isWarm ? 'warm' : 'cold', response.toolsUsed?.length || 0);
+          }
+          metricsService.recordEvent(chatGuid, 'sent');
 
           log('info', 'Response sent', {
             to: userHandle,
@@ -404,6 +586,7 @@ export class AgentService extends EventEmitter {
             processedLength: formatted.processedLength,
             typingDelayMs,
             inferenceDurationMs: response.durationMs,
+            warmPath: isWarm,
           });
 
           this.emit('messageSent', {
@@ -414,9 +597,11 @@ export class AgentService extends EventEmitter {
           });
         } else {
           log('error', 'Failed to send response');
+          metricsService.recordEvent(chatGuid, 'error');
         }
       } else {
         log('error', 'No response generated from local LLM');
+        metricsService.recordEvent(chatGuid, 'error');
       }
 
       // Note: Mark as read requires Private API, skipping
@@ -428,6 +613,7 @@ export class AgentService extends EventEmitter {
         chatGuid,
         messagePreview: message.text.substring(0, 80),
       });
+      metricsService.recordEvent(chatGuid, 'error');
       this.emit('error', error);
     } finally {
       this.processingQueue.delete(message.guid);
@@ -446,6 +632,28 @@ export class AgentService extends EventEmitter {
 
     // Evict stale conversation contexts to prevent memory leak (fixes D3)
     this.evictStaleConversations();
+  }
+
+  /**
+   * Phase 5.4: Observability hook for the /api/metrics endpoint.
+   * Returns per-chat queue depths and an aggregate count.
+   */
+  getQueueStats(): {
+    activeChats: number;
+    totalQueued: number;
+    perChat: Array<{ chatGuid: string; queueLength: number }>;
+  } {
+    const perChat: Array<{ chatGuid: string; queueLength: number }> = [];
+    let totalQueued = 0;
+    for (const [chatGuid, q] of this.chatQueues) {
+      perChat.push({ chatGuid, queueLength: q.length });
+      totalQueued += q.length;
+    }
+    return {
+      activeChats: this.chatLocks.size,
+      totalQueued,
+      perChat,
+    };
   }
 
   private evictStaleConversations(): void {
@@ -472,30 +680,41 @@ export class AgentService extends EventEmitter {
     chatGuid: string,
     userHandle: string,
     userMessage: string,
-    assistantResponse: string
+    assistantResponse: string,
+    contactName?: string
   ): void {
     try {
       const db = getDatabase();
 
+      // Determine display name: use resolved contact name if available, else handle
+      const displayName = (contactName && contactName !== userHandle && !/^[\d\s()+-]+$/.test(contactName))
+        ? contactName
+        : userHandle;
+
       // Get or create user (id is TEXT, so we need to generate a UUID)
       let user = db
-        .prepare('SELECT id FROM users WHERE handle = ?')
-        .get(userHandle) as { id: string } | undefined;
+        .prepare('SELECT id, display_name FROM users WHERE handle = ?')
+        .get(userHandle) as { id: string; display_name: string | null } | undefined;
 
       if (!user) {
         const userId = crypto.randomUUID();
-        log('info', 'Creating new user', { userId, handle: userHandle });
+        log('info', 'Creating new user', { userId, handle: userHandle, displayName });
         try {
           db.prepare('INSERT INTO users (id, handle, display_name) VALUES (?, ?, ?)')
-            .run(userId, userHandle, userHandle);
-          user = { id: userId };
+            .run(userId, userHandle, displayName);
+          user = { id: userId, display_name: displayName };
         } catch (insertError: any) {
           log('error', 'Failed to create user', { error: insertError.message });
           // Try to fetch again in case of race condition
           user = db
-            .prepare('SELECT id FROM users WHERE handle = ?')
-            .get(userHandle) as { id: string } | undefined;
+            .prepare('SELECT id, display_name FROM users WHERE handle = ?')
+            .get(userHandle) as { id: string; display_name: string | null } | undefined;
         }
+      } else if (displayName !== userHandle && user.display_name === userHandle) {
+        // Update display_name if we now have a real contact name but DB still has the phone number
+        db.prepare('UPDATE users SET display_name = ?, updated_at = datetime(\'now\') WHERE handle = ?')
+          .run(displayName, userHandle);
+        log('info', 'Updated user display name from contacts', { handle: userHandle, displayName });
       }
 
       if (!user || !user.id) {

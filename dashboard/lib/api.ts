@@ -150,6 +150,20 @@ export async function requestContactsPermission() {
   return request<{ success: boolean; status: string }>('/contacts/request-permission', { method: 'POST' });
 }
 
+// --- Contacts ---
+export interface MacContact {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phoneNumbers: string[];
+  emailAddresses: string[];
+  organization?: string;
+}
+
+export async function importContacts() {
+  return request<MacContact[]>('/contacts/import', { method: 'POST' });
+}
+
 // --- Users ---
 export interface User {
   id: string;

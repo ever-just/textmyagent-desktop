@@ -8,6 +8,7 @@ import dashboardRoutes from './routes/dashboard';
 import securityRoutes from './routes/security';
 import memoryRoutes from './routes/memory';
 import toolsRoutes from './routes/tools';
+import metricsRoutes from './routes/metrics';
 import { setupSecureStorageIPC } from '../utils/secure-storage';
 import { localLLMService } from './services/LocalLLMService';
 import { agentService } from './services/AgentService';
@@ -90,6 +91,7 @@ export async function startBackendServer(config: ServerConfig = {}): Promise<num
   expressApp.use('/api/dashboard/security', securityRoutes);
   expressApp.use('/api/dashboard/memory', memoryRoutes);
   expressApp.use('/api/dashboard/tools', toolsRoutes);
+  expressApp.use('/api/dashboard/metrics', metricsRoutes);
 
   // Serve static dashboard files in packaged app
   if (electronApp.isPackaged) {

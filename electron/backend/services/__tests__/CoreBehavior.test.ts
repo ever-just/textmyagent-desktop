@@ -73,6 +73,12 @@ vi.mock('../LocalLLMService', () => ({
   localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
     initModel: vi.fn().mockResolvedValue(undefined),
+    generateSummary: vi.fn().mockResolvedValue(null),
+    onSessionEvicted: vi.fn(),
+    getPoolStats: vi.fn().mockReturnValue({ size: 0, maxSize: 2, entries: [] }),
+    detectRecommendedPoolSize: vi.fn().mockReturnValue({ totalRamGB: 16, recommendedModel: 'E4B', maxPooledSessions: 4, contextSize: 4096, notes: 'test' }),
+    sweepIdleSessions: vi.fn().mockResolvedValue([]),
+    evictSession: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
     setMaxTokens: vi.fn(),
@@ -94,6 +100,8 @@ vi.mock('../MemoryService', () => ({
   memoryService: {
     getUserFacts: vi.fn().mockReturnValue([]),
     getLatestSummary: vi.fn().mockReturnValue(null),
+    saveFact: vi.fn(),
+    saveSummary: vi.fn(),
     expireOldFacts: vi.fn(),
     touchFact: vi.fn(),
   },
@@ -380,8 +388,8 @@ describe('Typing indicator delay', () => {
     agent.stop();
   });
 
-  it('should delay at least 200ms before sending (minimum typing time)', async () => {
-    // Very short response — should still wait 200ms minimum
+  it('should send immediately without typing delay (delay removed for responsiveness)', async () => {
+    // Very short response — should send immediately (no artificial delay)
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hi',
       inputTokens: 50,
@@ -392,18 +400,14 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('hey'));
 
-    // At 100ms — should NOT have sent yet
-    await vi.advanceTimersByTimeAsync(100);
-    expect(iMessageService.sendMessage).not.toHaveBeenCalled();
-
-    // At 300ms — should have sent (200ms min delay)
-    await vi.advanceTimersByTimeAsync(200);
+    // Should send immediately (within one tick)
+    await vi.advanceTimersByTimeAsync(50);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('should cap delay at 1000ms for long responses', async () => {
-    // Very long response — delay should not exceed 1000ms
+  it('should send long responses immediately (no delay cap needed)', async () => {
+    // Very long response — should still send immediately
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'X'.repeat(500),
       inputTokens: 100,
@@ -414,14 +418,13 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('tell me everything'));
 
-    // At 1200ms — should have sent (1000ms max delay)
-    await vi.advanceTimersByTimeAsync(1200);
+    await vi.advanceTimersByTimeAsync(50);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('should scale delay based on response length', async () => {
-    // Medium response: 100 chars * 8ms/char = 800ms (between min 200 and max 1000)
+  it('should send medium responses immediately (no length-based scaling)', async () => {
+    // Medium response — should send immediately like all responses
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Y'.repeat(100),
       inputTokens: 80,
@@ -432,12 +435,7 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('question'));
 
-    // At 500ms — should NOT have sent yet (need ~800ms)
-    await vi.advanceTimersByTimeAsync(500);
-    expect(iMessageService.sendMessage).not.toHaveBeenCalled();
-
-    // At 1000ms — should have sent
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(50);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -541,7 +539,7 @@ describe('Double-text queue serialization', () => {
     expect(vi.mocked(localLLMService.generateResponse).mock.calls.length).toBe(1);
   });
 
-  it('should queue up to MAX_CHAT_QUEUE_SIZE messages and drop oldest when full', async () => {
+  it('should queue up to MAX_CHAT_QUEUE_SIZE messages and drop NEW overflow (Phase 4.1: drop-newest policy)', async () => {
     // Block the first message so all subsequent ones queue up
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
@@ -560,9 +558,12 @@ describe('Double-text queue serialization', () => {
     const queue = (agent as any).chatQueues.get('iMessage;-;+15551234567');
     expect(queue.length).toBeLessThanOrEqual(5);
 
-    // The oldest queued message should have been dropped
-    // (msg 2 was first queued, but msg 2 should have been shifted out when msg 7 arrived)
-    expect(queue[0].text).not.toBe('msg 2');
+    // Phase 4.1: drop-newest policy — earliest queued message (msg 2) is preserved
+    // to maintain conversational context; newest overflow (msg 7) is rejected.
+    // This is the opposite of the old drop-oldest behavior.
+    expect(queue[0].text).toBe('msg 2');
+    // msg 7 should NOT be in the queue — it was rejected on overflow.
+    expect(queue.some((m: any) => m.text === 'msg 7')).toBe(false);
 
     // Cleanup: resolve to prevent hanging
     resolveFirst!({

@@ -23,8 +23,8 @@
 
 | Chip | Installer | Zip |
 |------|-----------|-----|
-| **Apple Silicon** (M1–M4) | [TextMyAgent-2.2.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-arm64.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-arm64-mac.zip) |
-| **Intel** | [TextMyAgent-2.2.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.2.0/TextMyAgent-2.2.0-mac.zip) |
+| **Apple Silicon** (M1–M4) | [TextMyAgent-2.4.0-arm64.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.4.0/TextMyAgent-2.4.0-arm64.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.4.0/TextMyAgent-2.4.0-arm64-mac.zip) |
+| **Intel** | [TextMyAgent-2.4.0.dmg](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.4.0/TextMyAgent-2.4.0.dmg) | [zip](https://github.com/ever-just/textmyagent-desktop/releases/download/v2.4.0/TextMyAgent-2.4.0-mac.zip) |
 
 ---
 

@@ -78,6 +78,12 @@ vi.mock('../LocalLLMService', () => ({
   localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
     initModel: vi.fn().mockResolvedValue(undefined),
+    generateSummary: vi.fn().mockResolvedValue(null),
+    onSessionEvicted: vi.fn(),
+    getPoolStats: vi.fn().mockReturnValue({ size: 0, maxSize: 2, entries: [] }),
+    detectRecommendedPoolSize: vi.fn().mockReturnValue({ totalRamGB: 16, recommendedModel: 'E4B', maxPooledSessions: 4, contextSize: 4096, notes: 'test' }),
+    sweepIdleSessions: vi.fn().mockResolvedValue([]),
+    evictSession: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
     setMaxTokens: vi.fn(),
@@ -93,9 +99,10 @@ vi.mock('../MemoryService', () => ({
   memoryService: {
     getUserFacts: vi.fn().mockReturnValue([]),
     getLatestSummary: vi.fn().mockReturnValue(null),
+    saveFact: vi.fn(),
+    saveSummary: vi.fn(),
     expireOldFacts: vi.fn(),
     touchFact: vi.fn(),
-    saveFact: vi.fn(),
   },
 }));
 
@@ -494,7 +501,7 @@ describe('SIM-3: Memory auto-save via tool execution', () => {
 // ============================================================================
 // SIM-4: TYPING DELAY REDUCTION
 // ============================================================================
-describe('SIM-4: Typing delay — 200ms to 1000ms range', () => {
+describe('SIM-4: Typing delay removed — immediate send for responsiveness', () => {
   let agent: AgentService;
 
   beforeEach(() => {
@@ -512,29 +519,23 @@ describe('SIM-4: Typing delay — 200ms to 1000ms range', () => {
   });
 
   const delayCases = [
-    { name: 'very short (2 chars)', content: 'Hi', expectedMin: 200, expectedMax: 250 },
-    { name: 'short (20 chars)',     content: 'Sure, I can help!!!!', expectedMin: 200, expectedMax: 250 },
-    { name: 'medium (80 chars)',    content: 'Y'.repeat(80), expectedMin: 600, expectedMax: 700 },
-    { name: 'long (200 chars)',     content: 'Z'.repeat(200), expectedMin: 1000, expectedMax: 1050 },
-    { name: 'very long (500 chars)', content: 'W'.repeat(500), expectedMin: 1000, expectedMax: 1050 },
+    { name: 'very short (2 chars)', content: 'Hi' },
+    { name: 'short (20 chars)',     content: 'Sure, I can help!!!!' },
+    { name: 'medium (80 chars)',    content: 'Y'.repeat(80) },
+    { name: 'long (200 chars)',     content: 'Z'.repeat(200) },
+    { name: 'very long (500 chars)', content: 'W'.repeat(500) },
   ];
 
   for (const tc of delayCases) {
-    it(`${tc.name}: delay should be ${tc.expectedMin}–${tc.expectedMax}ms`, async () => {
+    it(`${tc.name}: should send immediately (no artificial delay)`, async () => {
       vi.mocked(localLLMService.generateResponse).mockResolvedValue(
         llmResponse(tc.content, [], 300) as any
       );
 
       const p = (agent as any).handleIncomingMessage(msg('test'));
 
-      // Just before expectedMin — should NOT have sent
-      if (tc.expectedMin > 100) {
-        await vi.advanceTimersByTimeAsync(tc.expectedMin - 50);
-        expect(iMessageService.sendMessage).not.toHaveBeenCalled();
-      }
-
-      // After expectedMax — should have sent
-      await vi.advanceTimersByTimeAsync(tc.expectedMax + 100);
+      // Should send immediately
+      await vi.advanceTimersByTimeAsync(50);
       await p;
       expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
     });

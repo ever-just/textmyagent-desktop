@@ -5,6 +5,7 @@ import { toolRegistry, ToolCallContext } from './ToolRegistry';
 import type { PromptContext } from '../types';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -27,6 +28,28 @@ type LlamaContextInstance = any;
 
 export type ModelStatus = 'not_downloaded' | 'downloading' | 'ready' | 'loading' | 'loaded' | 'error';
 
+// Persistent session entry — keeps the LlamaChatSession + KV cache alive
+// so subsequent messages in the same conversation don't re-process history.
+interface SessionPoolEntry {
+  session: any;           // LlamaChatSession
+  lastActivity: number;   // epoch ms
+  chatGuid: string;
+  systemPrompt: string;   // system prompt used when session was created
+}
+
+// Session eviction callback signature (Phase 4.2: auto-summarization on eviction).
+// Handler receives the chatGuid of the session being evicted; caller owns message data.
+export type SessionEvictedHandler = (chatGuid: string, reason: 'lru' | 'idle_ttl' | 'manual' | 'error') => void | Promise<void>;
+
+// Pool size + model recommendation for the detected hardware.
+export interface PoolSizingRecommendation {
+  totalRamGB: number;
+  recommendedModel: 'E2B' | 'E4B';
+  maxPooledSessions: number;
+  contextSize: number;
+  notes: string;
+}
+
 export class LocalLLMService {
   private llama: LlamaInstance | null = null;
   private model: LlamaModelInstance | null = null;
@@ -34,7 +57,10 @@ export class LocalLLMService {
   private modelPath: string | null = null;
   private maxTokens = 1024;
   private temperature = 0.7;
-  private contextSize = 8192;
+  // contextSize default lowered from 8192 → 4096 after scale analysis.
+  // SMS conversations rarely need more than 3.5K tokens (system ~1K + facts/summary ~500 + last 20 msgs ~2K).
+  // Freeing the budget enables more concurrent pool slots. See docs/SCALE_AND_EFFICIENCY.md §7 Bottleneck #3.
+  private contextSize = 4096;
   private gpuLayers = -1;
   private initialized = false;
   private _status: ModelStatus = 'not_downloaded';
@@ -45,8 +71,162 @@ export class LocalLLMService {
   // Cache for dynamic import of node-llama-cpp (ESM module in CommonJS context)
   private _llamaModule: any = null;
 
+  // Session pool — keeps live LlamaChatSession per conversation so the KV cache
+  // retains prior turns and only the new message needs processing.
+  private sessionPool: Map<string, SessionPoolEntry> = new Map();
+  // maxPooledSessions: overridden by detectRecommendedPoolSize() on init.
+  // Default 2 is the conservative fallback for 8GB Macs.
+  private maxPooledSessions = 2;
+
+  // Phase 2.3: Idle TTL — evict sessions that haven't been used in IDLE_TTL_MS.
+  // Keeps the pool responsive to actually-active users rather than stale LRU order.
+  private static readonly IDLE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+  private static readonly IDLE_TTL_SWEEP_MS = 60 * 1000;  // check every 60s
+  private idleTtlTimer: NodeJS.Timeout | null = null;
+
+  // Phase 4.2: Pluggable eviction handler(s). AgentService registers one here
+  // to run auto-summarization before the session's context is lost.
+  // Handlers run async and MUST NOT throw up to the caller; eviction always proceeds.
+  private onSessionEvictedHandlers: SessionEvictedHandler[] = [];
+
   constructor() {
     // Don't initialize in constructor — wait for Electron app to be ready
+  }
+
+  /**
+   * Detect the machine's RAM and return a recommended pool + model configuration.
+   * Called once at initModel() time. Results logged for observability.
+   *
+   * Thresholds chosen in docs/SCALE_AND_EFFICIENCY.md §9 Phase 2.1:
+   *   ≤ 10 GB  → E2B, pool=2   (E4B ~5GB weights won't fit comfortably on 8GB)
+   *   ≤ 20 GB  → E4B, pool=4
+   *   ≤ 40 GB  → E4B, pool=6
+   *   > 40 GB  → E4B, pool=10
+   */
+  detectRecommendedPoolSize(): PoolSizingRecommendation {
+    const totalRamGB = os.totalmem() / (1024 ** 3);
+    let recommendedModel: 'E2B' | 'E4B';
+    let maxPooledSessions: number;
+    let notes: string;
+
+    if (totalRamGB <= 10) {
+      recommendedModel = 'E2B';
+      maxPooledSessions = 2;
+      notes = '8GB Mac detected: E4B (~5GB) would cause heavy swap; E2B recommended.';
+    } else if (totalRamGB <= 20) {
+      recommendedModel = 'E4B';
+      maxPooledSessions = 4;
+      notes = '16GB Mac detected: comfortable headroom for 4 warm sessions.';
+    } else if (totalRamGB <= 40) {
+      recommendedModel = 'E4B';
+      maxPooledSessions = 6;
+      notes = '32GB Mac detected: room for 6 warm sessions.';
+    } else {
+      recommendedModel = 'E4B';
+      maxPooledSessions = 10;
+      notes = '64GB+ Mac detected: room for 10+ warm sessions.';
+    }
+
+    return {
+      totalRamGB: Math.round(totalRamGB * 10) / 10,
+      recommendedModel,
+      maxPooledSessions,
+      contextSize: this.contextSize,
+      notes,
+    };
+  }
+
+  /**
+   * Register a callback invoked immediately before a session is disposed from the pool.
+   * Handlers run serially and their errors are caught & logged (not re-thrown).
+   * AgentService uses this to summarize conversations before their KV cache is lost.
+   */
+  onSessionEvicted(handler: SessionEvictedHandler): void {
+    this.onSessionEvictedHandlers.push(handler);
+    log('debug', 'Session eviction handler registered', { handlerCount: this.onSessionEvictedHandlers.length });
+  }
+
+  /**
+   * Internal: fire all eviction callbacks for the given chatGuid.
+   * Runs synchronously (blocks the eviction path) but with per-handler
+   * try/catch so no handler can break another. Async handlers are awaited
+   * briefly (up to 200ms each) to give summarization a chance to grab
+   * the conversation state before it's torn down; but eviction proceeds
+   * regardless — we prefer to free RAM promptly.
+   */
+  private async fireEvictionHandlers(chatGuid: string, reason: 'lru' | 'idle_ttl' | 'manual' | 'error'): Promise<void> {
+    if (this.onSessionEvictedHandlers.length === 0) return;
+    for (const handler of this.onSessionEvictedHandlers) {
+      try {
+        // Fire-and-forget: handler is responsible for its own backgrounding if it needs more time.
+        // We don't block eviction on slow summarization — handler should either be fast or schedule its own task.
+        const result = handler(chatGuid, reason);
+        if (result && typeof (result as any).catch === 'function') {
+          (result as Promise<void>).catch(err => {
+            log('warn', 'Session eviction handler threw asynchronously', {
+              chatGuid, reason, error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+      } catch (err) {
+        log('warn', 'Session eviction handler threw synchronously', {
+          chatGuid, reason, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  /**
+   * Phase 2.3: Start the idle TTL sweep. Safe to call multiple times (idempotent).
+   * Stopped automatically on dispose().
+   */
+  private startIdleTtlSweep(): void {
+    if (this.idleTtlTimer) return;
+    this.idleTtlTimer = setInterval(() => this.sweepIdleSessions(), LocalLLMService.IDLE_TTL_SWEEP_MS);
+    log('debug', 'Idle TTL sweep started', {
+      ttlMs: LocalLLMService.IDLE_TTL_MS,
+      sweepMs: LocalLLMService.IDLE_TTL_SWEEP_MS,
+    });
+  }
+
+  private stopIdleTtlSweep(): void {
+    if (this.idleTtlTimer) {
+      clearInterval(this.idleTtlTimer);
+      this.idleTtlTimer = null;
+      log('debug', 'Idle TTL sweep stopped');
+    }
+  }
+
+  /**
+   * Phase 2.3: Remove sessions idle for > IDLE_TTL_MS. Fires eviction handlers first.
+   * Exposed for testing; normally invoked by the sweep timer.
+   */
+  async sweepIdleSessions(): Promise<string[]> {
+    const now = Date.now();
+    const toEvict: string[] = [];
+    for (const [key, entry] of this.sessionPool) {
+      if (now - entry.lastActivity > LocalLLMService.IDLE_TTL_MS) {
+        toEvict.push(key);
+      }
+    }
+    if (toEvict.length === 0) return [];
+    log('debug', 'Idle TTL sweep: evicting stale sessions', {
+      count: toEvict.length,
+      poolSize: this.sessionPool.size,
+    });
+    for (const key of toEvict) {
+      await this.fireEvictionHandlers(key, 'idle_ttl');
+      const entry = this.sessionPool.get(key);
+      if (entry) {
+        try { entry.session?.dispose?.(); } catch { /* non-fatal */ }
+        this.sessionPool.delete(key);
+      }
+    }
+    log('info', 'Idle TTL sweep completed', {
+      evictedCount: toEvict.length,
+      remainingPoolSize: this.sessionPool.size,
+    });
+    return toEvict;
   }
 
   get status(): ModelStatus {
@@ -248,23 +428,59 @@ export class LocalLLMService {
       this.model = await this.llama.loadModel(loadOpts);
       log('info', 'Model binary loaded', { durationMs: Date.now() - loadStart });
 
-      // Let node-llama-cpp auto-detect optimal context size to avoid InsufficientMemoryError.
-      // Only specify contextSize if user explicitly set a non-default value.
-      const ctxOpts: Record<string, any> = {};
-      if (this.contextSize !== 8192) {
-        ctxOpts.contextSize = this.contextSize;
+      // Phase 2.1: Adapt pool size + context size to actual hardware BEFORE
+      // creating the context. Logs the decision so operators can see what was picked.
+      // User-configured contextSize (via settings) always wins over detected default.
+      const recommendation = this.detectRecommendedPoolSize();
+      const userConfiguredCtx = getSettingInt('model.contextSize', 0);
+      if (userConfiguredCtx > 0) {
+        this.contextSize = userConfiguredCtx;
+        log('info', 'Using user-configured contextSize from settings', { contextSize: this.contextSize });
       }
+      this.maxPooledSessions = recommendation.maxPooledSessions;
+      log('info', 'Adaptive resource sizing applied', {
+        totalRamGB: recommendation.totalRamGB,
+        recommendedModel: recommendation.recommendedModel,
+        maxPooledSessions: this.maxPooledSessions,
+        contextSize: this.contextSize,
+        notes: recommendation.notes,
+      });
+
+      // Phase 2.2: Always pass contextSize explicitly (previously only passed when != 8192,
+      // letting node-llama-cpp auto-detect). Now we control memory deterministically.
+      // Use sequences: maxPooledSessions so multiple conversations can batch inference.
+      const ctxOpts: Record<string, any> = {
+        sequences: this.maxPooledSessions,
+        contextSize: this.contextSize,
+      };
       try {
         this.context = await this.model.createContext(ctxOpts);
+        log('info', 'Context created with parallel sequences', {
+          sequences: this.maxPooledSessions,
+          contextSize: this.contextSize,
+        });
       } catch (ctxErr: any) {
-        // If context creation fails (e.g. InsufficientMemoryError), retry with no constraints
+        // If context creation fails (e.g. InsufficientMemoryError), retry with single sequence + smaller context
         if (ctxErr.name === 'InsufficientMemoryError' || ctxErr.message?.includes('memory')) {
-          log('warn', 'Context creation failed, retrying with auto settings', { error: ctxErr.message });
-          this.context = await this.model.createContext({});
+          log('warn', 'Multi-sequence context failed, falling back to single sequence', { error: ctxErr.message });
+          this.maxPooledSessions = 1;
+          // Try again with smaller context first, then let node-llama-cpp auto-detect as last resort.
+          const fallbackCtx = Math.min(this.contextSize, 2048);
+          try {
+            this.context = await this.model.createContext({ sequences: 1, contextSize: fallbackCtx });
+            this.contextSize = fallbackCtx;
+            log('info', 'Context created with single sequence + reduced context', { contextSize: fallbackCtx });
+          } catch {
+            this.context = await this.model.createContext({});
+            log('warn', 'Context created with auto-detected size after fallback');
+          }
         } else {
           throw ctxErr;
         }
       }
+
+      // Phase 2.3: Start idle TTL sweep AFTER context is ready.
+      this.startIdleTtlSweep();
 
       this.initialized = true;
       this._status = 'loaded';
@@ -283,10 +499,55 @@ export class LocalLLMService {
   }
 
   /**
+   * Dispose all pooled sessions, freeing their context sequences.
+   * Does NOT fire eviction handlers — used during full shutdown/reset where
+   * summarization would be unsafe (model being disposed).
+   */
+  private disposeAllSessions(): void {
+    const count = this.sessionPool.size;
+    for (const [key, entry] of this.sessionPool) {
+      try { entry.session?.dispose?.(); } catch { /* non-fatal */ }
+    }
+    this.sessionPool.clear();
+    if (count > 0) log('debug', 'All pooled sessions disposed', { count });
+  }
+
+  /**
+   * Evict a specific conversation's session from the pool (e.g. on conversation end).
+   * Fires eviction handlers so registered consumers (e.g. auto-summarization) can run.
+   */
+  async evictSession(chatGuid: string): Promise<void> {
+    const entry = this.sessionPool.get(chatGuid);
+    if (entry) {
+      await this.fireEvictionHandlers(chatGuid, 'manual');
+      try { entry.session?.dispose?.(); } catch { /* non-fatal */ }
+      this.sessionPool.delete(chatGuid);
+      log('debug', 'Session evicted from pool', { chatGuid, reason: 'manual', poolSize: this.sessionPool.size });
+    }
+  }
+
+  /**
+   * Observability: current pool state. Used by metrics endpoint.
+   */
+  getPoolStats(): { size: number; maxSize: number; entries: Array<{ chatGuid: string; ageMs: number }> } {
+    const now = Date.now();
+    return {
+      size: this.sessionPool.size,
+      maxSize: this.maxPooledSessions,
+      entries: Array.from(this.sessionPool.entries()).map(([chatGuid, entry]) => ({
+        chatGuid,
+        ageMs: now - entry.lastActivity,
+      })),
+    };
+  }
+
+  /**
    * Unload the model and free resources.
    */
   async dispose(): Promise<void> {
     try {
+      this.stopIdleTtlSweep();
+      this.disposeAllSessions();
       if (this.context) {
         await this.context.dispose();
         this.context = null;
@@ -308,6 +569,7 @@ export class LocalLLMService {
   }
 
   refreshClient(): void {
+    this.disposeAllSessions();
     this.initialized = false;
     this.model = null;
     this.context = null;
@@ -339,6 +601,86 @@ export class LocalLLMService {
     return this.initialized && this.model !== null;
   }
 
+  /**
+   * Phase 4.2: Generate a short summary from a transcript using an EPHEMERAL session.
+   *
+   * Differs from generateResponse() in important ways:
+   *   - Does NOT register tools (summarizer model should never call tools)
+   *   - Does NOT use the session pool (single-use, disposed immediately)
+   *   - Does NOT contribute to rate limit counters (internal utility call)
+   *   - Does NOT go through PromptBuilder (simpler system prompt)
+   *
+   * Returns the summary string, or null on failure. Non-throwing.
+   */
+  async generateSummary(
+    transcript: string,
+    options?: { maxTokens?: number; temperature?: number }
+  ): Promise<{ content: string; durationMs: number } | null> {
+    if (!this.model || !this.context) {
+      try { await this.initModel(); } catch { return null; }
+      if (!this.model || !this.context) return null;
+    }
+
+    const maxTokens = options?.maxTokens ?? 220;
+    const temperature = options?.temperature ?? 0.3; // lower temp for consistent summaries
+    const systemPrompt =
+      'You are a concise conversation summarizer. Read the transcript and write a single 2-3 sentence ' +
+      'note-to-self that captures key topics, commitments, and notable facts about the person. ' +
+      'Respond with ONLY the summary text. No preamble, no markdown, no formatting.';
+
+    const userPrompt =
+      `Summarize this conversation transcript:\n\n${transcript}\n\nSummary:`;
+
+    const startedAt = Date.now();
+    let session: any = null;
+    try {
+      const { LlamaChatSession } = await this.getLlamaModule();
+
+      // Acquire a fresh sequence. If the context is full, we'll need to evict
+      // the least-recently-used session first (same path as normal generation).
+      // For simplicity and safety, we grab a sequence the same way generateResponse does.
+      if (!this.context) return null;
+
+      session = new LlamaChatSession({
+        contextSequence: this.context.getSequence(),
+        systemPrompt,
+      });
+
+      // Tight inference timeout — summarization must not hang the agent
+      const abortController = new AbortController();
+      const timeoutMs = 30_000;
+      const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+
+      let content: string;
+      try {
+        content = await session.prompt(userPrompt, {
+          maxTokens,
+          temperature,
+          signal: abortController.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const trimmed = (content || '').trim();
+      if (!trimmed) {
+        log('warn', 'generateSummary produced empty output', { durationMs: Date.now() - startedAt });
+        return null;
+      }
+
+      return { content: trimmed, durationMs: Date.now() - startedAt };
+    } catch (err) {
+      log('warn', 'generateSummary failed', {
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startedAt,
+      });
+      return null;
+    } finally {
+      // Ephemeral session — always dispose to free its sequence
+      try { session?.dispose?.(); } catch { /* non-fatal */ }
+    }
+  }
+
   async generateResponse(
     userMessage: string,
     conversationHistory: Message[] = [],
@@ -361,10 +703,8 @@ export class LocalLLMService {
     const maxToolLoops = getSettingInt('security.maxApiCallsPerMessage', 6);
     const toolsEnabled = getSettingBool('tools.enabled', true);
 
-    // Create a dedicated context per generation to avoid exhaustion.
-    // A shared context fills up after the first large response and subsequent
-    // requests fail with no output.
-    let perRequestContext: any = null;
+    // Resolve chatGuid for session pooling — reuse existing session if same conversation
+    const chatGuid = toolContext?.chatGuid || '';
 
     try {
       const { LlamaChatSession, defineChatSessionFunction } = await this.getLlamaModule();
@@ -372,30 +712,87 @@ export class LocalLLMService {
       // Build system prompt
       const finalSystemPrompt = systemPrompt || promptBuilder.build(promptContext || { date: new Date().toLocaleString() });
 
-      // Create a fresh context + session for this request
-      perRequestContext = await this.model!.createContext({});
-      const session = new LlamaChatSession({
-        contextSequence: perRequestContext.getSequence(),
-        systemPrompt: finalSystemPrompt,
-      });
+      // Ensure context exists (always pass contextSize explicitly per Phase 2.2)
+      if (!this.context) {
+        const ctxOpts: Record<string, any> = {
+          sequences: this.maxPooledSessions,
+          contextSize: this.contextSize,
+        };
+        this.context = await this.model!.createContext(ctxOpts);
+      }
 
-      // Pre-populate conversation history
-      if (conversationHistory.length > 0) {
-        // node-llama-cpp's setChatHistory allows setting prior turns
-        const chatHistory = [
-          { type: 'system', text: finalSystemPrompt },
-          ...conversationHistory.map((m) => ({
-            type: m.role === 'user' ? 'user' : 'model',
-            response: m.role === 'assistant' ? [m.content] : undefined,
-            text: m.role === 'user' ? m.content : undefined,
-          })),
-        ];
-        try {
-          session.setChatHistory(chatHistory as any);
-        } catch {
-          // If setChatHistory fails, history was already set via systemPrompt
-          log('warn', 'setChatHistory failed, using system prompt only');
+      // --- Session pooling ---
+      // Reuse a live session for this conversation if available. The KV cache
+      // already contains all prior turns, so only the new message is processed.
+      // If no session exists, create one and populate it with history.
+      let session: any;
+      let isReusedSession = false;
+      const poolEntry = chatGuid ? this.sessionPool.get(chatGuid) : undefined;
+
+      if (poolEntry) {
+        session = poolEntry.session;
+        poolEntry.lastActivity = Date.now();
+        isReusedSession = true;
+        log('debug', 'Reusing pooled session', { chatGuid, poolSize: this.sessionPool.size });
+      } else {
+        // Evict least-recently-used session if pool is full
+        if (this.sessionPool.size >= this.maxPooledSessions) {
+          let oldestKey: string | null = null;
+          let oldestTime = Infinity;
+          for (const [key, entry] of this.sessionPool) {
+            if (entry.lastActivity < oldestTime) {
+              oldestTime = entry.lastActivity;
+              oldestKey = key;
+            }
+          }
+          if (oldestKey) {
+            // Phase 4.2: fire eviction handlers BEFORE disposing so summarization can run
+            await this.fireEvictionHandlers(oldestKey, 'lru');
+            const evicted = this.sessionPool.get(oldestKey);
+            try { evicted?.session?.dispose?.(); } catch { /* non-fatal */ }
+            this.sessionPool.delete(oldestKey);
+            log('debug', 'Evicted LRU session from pool', {
+              evictedChat: oldestKey,
+              reason: 'lru',
+              poolSize: this.sessionPool.size,
+            });
+          }
         }
+
+        // Create new session with a fresh sequence from the context
+        session = new LlamaChatSession({
+          contextSequence: this.context.getSequence(),
+          systemPrompt: finalSystemPrompt,
+        });
+
+        // Pre-populate conversation history so model has context of prior turns
+        if (conversationHistory.length > 0) {
+          const chatHistory = [
+            { type: 'system', text: finalSystemPrompt },
+            ...conversationHistory.map((m) => ({
+              type: m.role === 'user' ? 'user' : 'model',
+              response: m.role === 'assistant' ? [m.content] : undefined,
+              text: m.role === 'user' ? m.content : undefined,
+            })),
+          ];
+          try {
+            session.setChatHistory(chatHistory as any);
+          } catch {
+            log('warn', 'setChatHistory failed, using system prompt only');
+          }
+        }
+
+        // Add to pool
+        if (chatGuid) {
+          this.sessionPool.set(chatGuid, {
+            session,
+            lastActivity: Date.now(),
+            chatGuid,
+            systemPrompt: finalSystemPrompt,
+          });
+        }
+
+        log('debug', 'Created new pooled session', { chatGuid, poolSize: this.sessionPool.size, isReusedSession });
       }
 
       // Register tools if enabled
@@ -440,14 +837,42 @@ export class LocalLLMService {
         }
       }
 
-      // Generate response with tool support
+      // Generate response with tool support + inference timeout
       const startTime = Date.now();
-      let response = await session.prompt(userMessage, {
-        maxTokens: this.maxTokens,
-        temperature: this.temperature,
-        functions: Object.keys(toolFunctions).length > 0 ? toolFunctions : undefined,
-        maxParallelFunctionCalls: 1,
-      });
+      const abortController = new AbortController();
+      const inferenceTimeoutMs = 90_000; // 90-second hard limit
+      const timeoutId = setTimeout(() => abortController.abort(), inferenceTimeoutMs);
+
+      let response: string;
+      try {
+        response = await session.prompt(userMessage, {
+          maxTokens: this.maxTokens,
+          temperature: this.temperature,
+          functions: Object.keys(toolFunctions).length > 0 ? toolFunctions : undefined,
+          maxParallelFunctionCalls: 1,
+          signal: abortController.signal,
+        });
+      } catch (promptErr: any) {
+        clearTimeout(timeoutId);
+        const isTimeout = promptErr.name === 'AbortError' || promptErr.message?.includes('abort');
+        const isMemory = promptErr.name === 'InsufficientMemoryError' || promptErr.message?.includes('memory');
+        if (isTimeout || isMemory) {
+          log('warn', `Inference ${isTimeout ? 'timed out' : 'ran out of context memory'}, recycling context`, {
+            durationMs: Date.now() - startTime,
+          });
+        }
+        // Dispose failed session and remove from pool
+        try { session.dispose?.(); } catch { /* non-fatal */ }
+        if (chatGuid) this.sessionPool.delete(chatGuid);
+        // Recycle full context on memory/timeout errors
+        if (isTimeout || isMemory) {
+          this.disposeAllSessions();
+          try { await this.context?.dispose?.(); } catch { /* non-fatal */ }
+          this.context = null;
+        }
+        throw promptErr;
+      }
+      clearTimeout(timeoutId);
       const durationMs = Date.now() - startTime;
 
       // --- Raw tool call fallback (Gemma 4 workaround) ---
@@ -470,16 +895,15 @@ export class LocalLLMService {
         estimatedOutputTokens,
         toolsUsed: toolsUsed.join(', ') || 'none',
         durationMs,
+        isReusedSession,
+        poolSize: this.sessionPool.size,
         responsePreview: response.substring(0, 150) || '(empty)',
       });
 
-      // Dispose session + per-request context to free resources
-      try {
-        session.dispose?.();
-      } catch { /* non-fatal */ }
-      try {
-        await perRequestContext?.dispose?.();
-      } catch { /* non-fatal */ }
+      // Update pool entry activity timestamp (session stays alive for next message)
+      if (chatGuid && this.sessionPool.has(chatGuid)) {
+        this.sessionPool.get(chatGuid)!.lastActivity = Date.now();
+      }
 
       return {
         content: response,
@@ -491,9 +915,6 @@ export class LocalLLMService {
       };
     } catch (error: any) {
       log('error', 'Local LLM generation error', { error: error.message, stack: error.stack });
-      try {
-        await perRequestContext?.dispose?.();
-      } catch { /* non-fatal */ }
       return null;
     }
   }

@@ -57,12 +57,13 @@ describe('RateLimiter', () => {
       expect(result.allowed).toBe(true);
     });
 
-    it('blocks when global limit (default 200) is exceeded', () => {
-      // Use 200 different users to exhaust the global limit
-      for (let i = 0; i < 200; i++) {
+    it('blocks when global limit (default 5000) is exceeded', () => {
+      // Use 5000 different users to exhaust the global limit.
+      // Default raised from 200 → 5000 in docs/SCALE_AND_EFFICIENCY.md §7 Bottleneck #1.
+      for (let i = 0; i < 5000; i++) {
         limiter.checkLimit(`user-${i}`);
       }
-      // 201st request should be globally rate-limited
+      // 5001st request should be globally rate-limited
       const result = limiter.checkLimit('user-overflow');
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain('Global rate limit exceeded');
@@ -89,7 +90,8 @@ describe('RateLimiter', () => {
     it('returns zero requests initially', () => {
       const state = limiter.getGlobalState();
       expect(state.requestsInWindow).toBe(0);
-      expect(state.limit).toBe(200);
+      // Default raised from 200 → 5000 (see RateLimiter.ts comment + SCALE_AND_EFFICIENCY.md).
+      expect(state.limit).toBe(5000);
     });
 
     it('increments after requests', () => {

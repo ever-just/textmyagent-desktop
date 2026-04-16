@@ -26,7 +26,11 @@ export class RateLimiter {
   // Defaults — overridden by settings at check time
   private static DEFAULT_PER_USER_LIMIT = 10;     // per minute
   private static DEFAULT_PER_USER_WINDOW_MS = 60_000; // 1 minute
-  private static DEFAULT_GLOBAL_LIMIT = 200;       // per hour
+  // DEFAULT_GLOBAL_LIMIT raised from 200 → 5000 after scale analysis
+  // (docs/SCALE_AND_EFFICIENCY.md §7 Bottleneck #1). Original 200/hr was
+  // sized for paid-API cost control; local inference has no per-message cost,
+  // so this was capping throughput to ~17% of real hardware capacity.
+  private static DEFAULT_GLOBAL_LIMIT = 5000;      // per hour
   private static DEFAULT_GLOBAL_WINDOW_MS = 3_600_000; // 1 hour
 
   /**

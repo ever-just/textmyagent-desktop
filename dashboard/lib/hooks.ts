@@ -23,7 +23,7 @@ export function useSetupStatus() {
 }
 
 export function usePermissions() {
-  return useSWR('permissions', () => fetcher(() => api.getPermissions()), { refreshInterval: 5000, ...RETRY_OPTS });
+  return useSWR('permissions', () => fetcher(() => api.getPermissions()), { refreshInterval: 60000, ...RETRY_OPTS });
 }
 
 export function useUsers() {

@@ -26,6 +26,9 @@ export interface PermissionsCheckResult {
 
 class PermissionServiceClass {
   private static instance: PermissionServiceClass;
+  private cachedResult: PermissionsCheckResult | null = null;
+  private cacheTimestamp = 0;
+  private static readonly CACHE_TTL_MS = 30_000; // 30 seconds
 
   private constructor() {}
 
@@ -37,9 +40,14 @@ class PermissionServiceClass {
   }
 
   /**
-   * Check all required permissions for the app to function
+   * Check all required permissions for the app to function.
+   * Results are cached for 30 seconds to avoid redundant OS checks.
    */
   async checkAllPermissions(): Promise<PermissionsCheckResult> {
+    // Return cached result if still fresh
+    if (this.cachedResult && Date.now() - this.cacheTimestamp < PermissionServiceClass.CACHE_TTL_MS) {
+      return this.cachedResult;
+    }
     const permissions: PermissionStatus[] = [];
 
     // Check Full Disk Access (required for iMessage database)
@@ -59,11 +67,10 @@ class PermissionServiceClass {
       .filter(p => p.required)
       .every(p => p.status === 'granted');
 
-    return {
-      allGranted,
-      requiredGranted,
-      permissions,
-    };
+    const result = { allGranted, requiredGranted, permissions };
+    this.cachedResult = result;
+    this.cacheTimestamp = Date.now();
+    return result;
   }
 
   /**
@@ -78,7 +85,7 @@ class PermissionServiceClass {
       const fd = fs.openSync(iMessageDbPath, 'r');
       fs.closeSync(fd);
       status = 'granted';
-      log('info', 'Full Disk Access check: granted');
+      log('debug', 'Full Disk Access check: granted');
     } catch (error: any) {
       if (error.code === 'EACCES' || error.code === 'EPERM') {
         status = 'denied';
@@ -123,7 +130,7 @@ class PermissionServiceClass {
       // This should trigger the automation permission prompt if not granted
       await execAsync(`osascript -e 'tell application "System Events" to return name of first process whose frontmost is true'`);
       status = 'granted';
-      log('info', 'Automation permission check: granted');
+      log('debug', 'Automation permission check: granted');
     } catch (error: any) {
       if (error.message.includes('not allowed') || error.message.includes('denied')) {
         status = 'denied';
@@ -173,7 +180,7 @@ class PermissionServiceClass {
         status = 'unknown';
       }
       
-      log('info', 'Contacts permission check', { authStatus, status });
+      log('debug', 'Contacts permission check', { authStatus, status });
     } catch (error: any) {
       log('warn', 'Contacts permission check failed', { error: error.message });
       status = 'unknown';

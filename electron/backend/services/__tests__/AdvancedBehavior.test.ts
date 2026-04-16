@@ -81,12 +81,25 @@ vi.mock('../LocalLLMService', () => ({
     initModel: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
+    generateSummary: vi.fn().mockResolvedValue(null),
     setMaxTokens: vi.fn(),
     setTemperature: vi.fn(),
     setContextSize: vi.fn(),
     syncSettings: vi.fn(),
     status: 'loaded',
     isModelDownloaded: vi.fn().mockReturnValue(true),
+    // Phase 2/4.2 additions:
+    onSessionEvicted: vi.fn(),
+    getPoolStats: vi.fn().mockReturnValue({ size: 0, maxSize: 2, entries: [] }),
+    detectRecommendedPoolSize: vi.fn().mockReturnValue({
+      totalRamGB: 16,
+      recommendedModel: 'E4B',
+      maxPooledSessions: 4,
+      contextSize: 4096,
+      notes: 'test mock',
+    }),
+    sweepIdleSessions: vi.fn().mockResolvedValue([]),
+    evictSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -102,6 +115,8 @@ vi.mock('../MemoryService', () => ({
     getLatestSummary: vi.fn().mockReturnValue(null),
     expireOldFacts: vi.fn(),
     touchFact: vi.fn(),
+    saveFact: vi.fn(),
+    saveSummary: vi.fn(),
   },
 }));
 
@@ -280,7 +295,7 @@ describe('Mass response prevention', () => {
     );
   });
 
-  it('should limit queued messages per chat to MAX_CHAT_QUEUE_SIZE (5)', async () => {
+  it('should limit queued messages per chat to MAX_CHAT_QUEUE_SIZE (5) with drop-newest policy', async () => {
     let resolveFirst: (v: any) => void;
     const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
     vi.mocked(localLLMService.generateResponse).mockReturnValue(firstPromise as any);
@@ -297,10 +312,11 @@ describe('Mass response prevention', () => {
     const queue = (agent as any).chatQueues.get('iMessage;-;+15559876543');
     expect(queue.length).toBeLessThanOrEqual(5);
 
-    // Oldest messages were dropped
+    // Phase 4.1: drop-newest policy — newest overflowing messages rejected,
+    // first 5 (earliest context) preserved in queue.
     expect(log).toHaveBeenCalledWith(
-      'warn', 'Chat queue full, dropping oldest queued message',
-      expect.any(Object)
+      'warn', 'Chat queue full, dropping NEW incoming message to preserve context',
+      expect.objectContaining({ chatGuid: 'iMessage;-;+15559876543' })
     );
 
     // Cleanup
@@ -671,7 +687,7 @@ describe('Tool call UX — typing indicator during processing', () => {
     agent.stop();
   });
 
-  it('should apply typing delay even after tool calls (user sees "typing" indicator)', async () => {
+  it('should send immediately after tool calls (no artificial typing delay)', async () => {
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'The answer is 42.',
       inputTokens: 200,
@@ -683,12 +699,8 @@ describe('Tool call UX — typing indicator during processing', () => {
     const m = createMsg('What is the answer?');
     const promise = (agent as any).handleIncomingMessage(m);
 
-    // At 0ms — should NOT have sent yet (typing delay)
-    await vi.advanceTimersByTimeAsync(100);
-    expect(iMessageService.sendMessage).not.toHaveBeenCalled();
-
-    // After typing delay — should send
-    await vi.advanceTimersByTimeAsync(5000);
+    // Should send immediately (no typing delay)
+    await vi.advanceTimersByTimeAsync(50);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });

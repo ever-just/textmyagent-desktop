@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 - Multi-language support
+- Message coalescing (Phase 5.1 in scale plan)
+- Prefix cache empirical verification benchmarks
+- Optional experimental KV cache quantization (dev-mode only)
+
+## [2.4.0] - 2026-04-16
+
+**Scale & Efficiency release.** Removes artificial throughput bottlenecks, adds adaptive hardware sizing, and makes conversation continuity far more efficient. See `docs/SCALE_AND_EFFICIENCY.md` for the full plan + honest limits.
+
+### Added
+
+- **Adaptive resource sizing (Phase 2.1)** — On model load, detect total RAM and auto-size the session pool + recommend the right model variant: 8GB → E2B, pool 2; 16GB → E4B, pool 4; 32GB → E4B, pool 6; 64GB+ → E4B, pool 10. Logged with full rationale so operators can see what was picked.
+- **Idle TTL on session pool (Phase 2.3)** — Warm sessions are now evicted after 10 minutes of inactivity, freeing pool slots for actually-active users instead of waiting for LRU pressure. Sweep runs every 60s.
+- **Auto-summarization on eviction (Phase 4.2)** — When any session leaves the pool (LRU, idle TTL, manual), `AgentService` captures the conversation as a 2-3 sentence summary before the KV cache is lost. Uses an ephemeral summarization session with a tight 30s timeout; never pollutes the evicted session's state. Persisted via `memoryService.saveSummary()`.
+- **Cold-start summary recall (Phase 5.3)** — Returning users whose session was evicted now have their most recent `conversation_summary` injected into the prompt context, giving the LLM structural recall without needing to prefill the full message history.
+- **`/api/dashboard/metrics` endpoint (Phase 5.4)** — New observability route exposing: per-message latency (avg/p50/p95/max) with warm/cold/summary scenario breakdown, throughput estimate (messages/hour extrapolated from 15-min window), outcome counts (sent/rate_limited/queue_dropped/error/tool_only/wait), system resources (RAM usage, process RSS), LLM pool state (size/max/per-session ages), rate limiter state, and per-chat queue depths.
+- **`MetricsService`** — In-memory ring-buffer metrics (500 samples) with reset for tests. Zero external dependencies, zero DB I/O, safe to call frequently.
+- **`LocalLLMService.generateSummary()`** — Dedicated summarization API that bypasses the tool pipeline, uses an ephemeral (non-pooled) session, and is immune to rate-limit counters so internal summarization calls don't exhaust user quotas.
+- **`LocalLLMService.onSessionEvicted()` callback pattern** — Eviction handlers can be registered by any service; runs before session dispose with per-handler error isolation. Enables the summarization flow without coupling `LocalLLMService` to `AgentService`'s message history.
+- **35 new regression tests** in `ScaleEfficiency.test.ts` covering adaptive pool sizing across 4 RAM tiers, idle TTL eviction, eviction callback safety (sync/async errors), metrics ring buffer + percentiles + throughput estimation, and 11 structural source-code invariants to catch future regressions.
+- **Contact picker UI** on the dashboard home page — manage reply-mode (everyone vs. allowlist) and the allowed-contacts list directly from the main dashboard. Includes search, add/remove flow, live save indicator.
+- **Contacts import API** (`POST /api/dashboard/contacts/import`) — imports macOS Contacts into the app's user directory for use in the allowlist picker. `MacContact` type exported from `dashboard/lib/api.ts`.
+
+### Changed
+
+- **Global rate limit default raised 200 → 5000 per hour** (`RateLimiter.DEFAULT_GLOBAL_LIMIT`). The 200/hr default was a legacy paid-API cost-control measure that capped local inference to ~17% of real hardware capacity. DB seed updated to match for new installs; existing installs keep their configured value.
+- **Default context size lowered 8192 → 4096 tokens** (`LocalLLMService.contextSize`). SMS-style conversations rarely need more than ~3.5K tokens (system prompt ~1K + facts/summary ~500 + last 20 messages ~2K), and the lower default frees ~60-120 MB per session to fund more pool slots.
+- **Context size now passed explicitly** to `model.createContext()` instead of relying on node-llama-cpp's auto-detection. We control memory deterministically rather than guessing.
+- **Per-chat queue overflow policy: drop-newest instead of drop-oldest (Phase 4.1)** — When a chat's queue fills (>5 pending messages), the newest incoming message is rejected rather than silently dropping the oldest queued one. Preserves earliest conversational context for the pending LLM response instead of leaving the agent responding to phantom mid-conversation state.
+- **Warm-conversation fast path (Phase 3.1)** — Conversations active within the last 10 minutes now skip the full `iMessage` history reload (saves ~100-300ms per warm message), relying on the in-memory `conversations` map instead. Cold conversations still get the full reload.
+- **LRU eviction now fires registered eviction handlers** — Previously silent; now triggers the auto-summarization hook before session disposal.
+- **`polling.sleepIntervalMs` code/DB default unified at 15000ms** — Previously the DB seeded 15s but the code fallback was 5s, creating a silent mismatch when the DB setting was missing.
+- **Permission check caching** — `PermissionService.checkAllPermissions()` now caches results for 30 seconds, reducing redundant OS-level authorization probes.
+- **Permission polling interval 5s → 60s** — Dashboard `usePermissions()` hook refreshes once a minute instead of every 5 seconds. Permissions rarely change during a session.
+- **Reduced log verbosity** — Per-permission-check info logs downgraded to debug level so normal operation is quieter.
+- **Version alignment** — Dashboard `package.json` was stuck at 2.1.0 while root was at 2.3.0, causing the app-footer version display (bottom-left sidebar) to show a stale number. Both are now synchronized at 2.4.0.
+
+### Fixed
+
+- **Silent queue message loss** during conversation bursts — drop-oldest policy meant early context could be lost without the agent realizing. Drop-newest now logs every rejection with chatGuid + preview.
+- **Session-reuse assumption test** (`BehaviorSimulation`, `AdvancedBehavior`, `CoreBehavior`, `ToolSimulation`, `AuditFixes`) — 5 test-file mocks updated to expose the new `onSessionEvicted`, `getPoolStats`, `detectRecommendedPoolSize`, `sweepIdleSessions`, `generateSummary`, `evictSession` methods so test suites load `AgentService` correctly.
+
+### Documentation
+
+- **`docs/SCALE_AND_EFFICIENCY.md`** — New 12-section consolidated plan covering: complete inbound pipeline diagram, every queue & throttle with capacity numbers, session reuse mechanism, measured bandwidth vs theoretical, realistic user capacity by hardware tier, 8 bottlenecks ranked by impact, 13 things already efficient (preserve list), 5-phase fix plan, honest limits & tradeoffs, explicit non-goals & rejected ideas, and research history with audit corrections.
+- **`docs/SCALE_RESEARCH_FINDINGS.md`** + **`docs/SCALE_ARCHITECTURE_PLAN.md`** — Earlier drafts retained for audit trail (superseded by `SCALE_AND_EFFICIENCY.md`).
+
+### Performance Impact (estimated)
+
+| Metric | 2.3.0 | 2.4.0 |
+|---|---|---|
+| Max sustained throughput | 200 msg/hr (artificial cap) | ~300-580 msg/hr mixed |
+| Warm session capacity (16GB Mac) | 2 conversations | 4 conversations |
+| Warm session capacity (32GB Mac) | 2 conversations | 6 conversations |
+| Latency for returning user (was evicted, had summary) | Full history replay | Summary-based cold-start |
+| Observability | None | `/api/dashboard/metrics` |
 
 ## [2.3.0] - 2026-04-16
 

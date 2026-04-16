@@ -512,7 +512,10 @@ export function seedDefaultSettings(): void {
     'agent.splitDelaySeconds': JSON.stringify(1.0),
     // Security
     'security.rateLimitPerMinute': JSON.stringify(10),
-    'security.rateLimitGlobalPerHour': JSON.stringify(200),
+    // 5000/hr: raised from 200/hr — 200 was legacy paid-API cost control.
+    // See docs/SCALE_AND_EFFICIENCY.md §7 Bottleneck #1.
+    // Existing installs keep their current value; only new installs get 5000.
+    'security.rateLimitGlobalPerHour': JSON.stringify(5000),
     'security.dailyBudgetCents': JSON.stringify(0), // 0 = no limit
     'security.maxApiCallsPerMessage': JSON.stringify(6),
     'security.outputSanitization': JSON.stringify(true),

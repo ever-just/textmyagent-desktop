@@ -136,10 +136,16 @@ export class IMessageServiceClass extends EventEmitter {
    * - Idle    (2–10 min): medium interval
    * - Sleep   (> 10 min): slow interval
    */
+  private static readonly MIN_POLL_INTERVAL_MS = 500; // Floor — never poll faster than 500ms
+
   private getAdaptiveInterval(): number {
-    const activeMs  = getSettingInt('polling.activeIntervalMs', 2000);
-    const idleMs    = getSettingInt('polling.idleIntervalMs', 5000);
-    const sleepMs   = getSettingInt('polling.sleepIntervalMs', 15000);
+    const floor = IMessageServiceClass.MIN_POLL_INTERVAL_MS;
+    // Defaults here MUST match the DB seed in database.ts seedDefaultSettings().
+    // Previously sleepIntervalMs code-fallback was 5000 while DB seed was 15000 —
+    // unified to 15000 to eliminate silent mismatch (docs/SCALE_AND_EFFICIENCY.md §3.1).
+    const activeMs  = Math.max(floor, getSettingInt('polling.activeIntervalMs', 2000));
+    const idleMs    = Math.max(floor, getSettingInt('polling.idleIntervalMs', 5000));
+    const sleepMs   = Math.max(floor, getSettingInt('polling.sleepIntervalMs', 15000));
 
     const elapsed = Date.now() - this.lastMessageTime;
     if (elapsed < 2 * 60 * 1000) return activeMs;   // < 2 min

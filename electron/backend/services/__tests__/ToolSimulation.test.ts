@@ -73,6 +73,12 @@ vi.mock('../LocalLLMService', () => ({
   localLLMService: {
     isConfigured: vi.fn().mockReturnValue(true),
     initModel: vi.fn().mockResolvedValue(undefined),
+    generateSummary: vi.fn().mockResolvedValue(null),
+    onSessionEvicted: vi.fn(),
+    getPoolStats: vi.fn().mockReturnValue({ size: 0, maxSize: 2, entries: [] }),
+    detectRecommendedPoolSize: vi.fn().mockReturnValue({ totalRamGB: 16, recommendedModel: 'E4B', maxPooledSessions: 4, contextSize: 4096, notes: 'test' }),
+    sweepIdleSessions: vi.fn().mockResolvedValue([]),
+    evictSession: vi.fn().mockResolvedValue(undefined),
     refreshClient: vi.fn(),
     generateResponse: vi.fn(),
     setMaxTokens: vi.fn(),
@@ -94,6 +100,8 @@ vi.mock('../MemoryService', () => ({
   memoryService: {
     getUserFacts: vi.fn().mockReturnValue([]),
     getLatestSummary: vi.fn().mockReturnValue(null),
+    saveFact: vi.fn(),
+    saveSummary: vi.fn(),
     expireOldFacts: vi.fn(),
   },
 }));
