@@ -39,6 +39,7 @@ export class LocalLLMService {
   private _status: ModelStatus = 'not_downloaded';
   private _downloadProgress = 0;
   private _errorMessage: string | null = null;
+  private _loadingPromise: Promise<void> | null = null;
 
   // Cache for dynamic import of node-llama-cpp (ESM module in CommonJS context)
   private _llamaModule: any = null;
@@ -169,7 +170,19 @@ export class LocalLLMService {
   async initModel(): Promise<void> {
     if (this.initialized && this.model) return;
 
+    // Guard against concurrent load calls
+    if (this._loadingPromise) return this._loadingPromise;
+    this._loadingPromise = this._doInitModel();
+    try {
+      await this._loadingPromise;
+    } finally {
+      this._loadingPromise = null;
+    }
+  }
+
+  private async _doInitModel(): Promise<void> {
     this._status = 'loading';
+    this._errorMessage = null;
     this.syncSettings();
 
     try {
@@ -205,14 +218,17 @@ export class LocalLLMService {
       if (this.gpuLayers !== -1) {
         loadOpts.gpuLayers = this.gpuLayers;
       }
+      const loadStart = Date.now();
       this.model = await this.llama.loadModel(loadOpts);
+      log('info', 'Model binary loaded', { durationMs: Date.now() - loadStart });
+
       this.context = await this.model.createContext({
         contextSize: this.contextSize,
       });
 
       this.initialized = true;
       this._status = 'loaded';
-      log('info', 'Local LLM model loaded successfully');
+      log('info', 'Local LLM model loaded successfully', { totalDurationMs: Date.now() - loadStart });
     } catch (error: any) {
       this.initialized = false;
       this.model = null;
@@ -238,6 +254,10 @@ export class LocalLLMService {
       if (this.model) {
         await this.model.dispose();
         this.model = null;
+      }
+      if (this.llama?.dispose) {
+        await this.llama.dispose();
+        this.llama = null;
       }
       this.initialized = false;
       this._status = this.isModelDownloaded() ? 'ready' : 'not_downloaded';

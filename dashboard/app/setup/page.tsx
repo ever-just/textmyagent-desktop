@@ -5,7 +5,7 @@ import { useSetupStatus, usePermissions } from '@/lib/hooks';
 import {
   startModelDownload,
   getModelStatus,
-  testModel,
+  loadModel,
   openPermissionSettings,
   requestAutomation,
   requestContactsPermission,
@@ -276,22 +276,49 @@ export default function SetupPage() {
   );
 
   // -----------------------------------------------------------------------
-  // Model load / test
+  // Model load — kick off async load + poll status
   // -----------------------------------------------------------------------
+  const loadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup load polling on unmount
+  useEffect(() => {
+    return () => {
+      if (loadPollRef.current) clearInterval(loadPollRef.current);
+    };
+  }, []);
+
   const handleLoadModel = useCallback(async () => {
     setModelLoading(true);
     setModelError(null);
     try {
-      const result = await testModel();
-      if (result.success) {
-        setModelLoaded(true);
-      } else {
-        setModelError(result.error || 'Model failed to load');
-      }
+      await loadModel();
+      // Poll for load completion
+      if (loadPollRef.current) clearInterval(loadPollRef.current);
+      loadPollRef.current = setInterval(async () => {
+        try {
+          const s = await getModelStatus();
+          if (s.status === 'loaded' || s.isLoaded) {
+            clearInterval(loadPollRef.current!);
+            loadPollRef.current = null;
+            setModelLoading(false);
+            setModelLoaded(true);
+          }
+          if (s.status === 'error') {
+            clearInterval(loadPollRef.current!);
+            loadPollRef.current = null;
+            setModelLoading(false);
+            setModelError(s.errorMessage || 'Model failed to load. Please retry.');
+          }
+        } catch {
+          clearInterval(loadPollRef.current!);
+          loadPollRef.current = null;
+          setModelLoading(false);
+          setModelError('Lost connection while loading model.');
+        }
+      }, 2000);
     } catch (err: any) {
-      setModelError(err.message || 'Failed to load model');
-    } finally {
       setModelLoading(false);
+      setModelError(err.message || 'Failed to start model loading');
     }
   }, []);
 
@@ -635,14 +662,24 @@ export default function SetupPage() {
                       Starting download…
                     </div>
                   )}
-                  {modelError && (
+                  {modelError && !modelReady && (
                     <Button
                       variant="secondary"
                       size="md"
                       icon={<Download className="w-4 h-4" />}
                       onClick={() => { downloadTriggered.current = false; handleDownloadModel(); }}
                     >
-                      Retry
+                      Retry Download
+                    </Button>
+                  )}
+                  {modelError && modelReady && (
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      icon={<Cpu className="w-4 h-4" />}
+                      onClick={() => handleLoadModel()}
+                    >
+                      Retry Load
                     </Button>
                   )}
                 </div>

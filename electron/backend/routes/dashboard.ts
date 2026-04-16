@@ -469,8 +469,17 @@ router.post('/model/download', async (_req: Request, res: Response) => {
 
 router.post('/model/load', async (_req: Request, res: Response) => {
   try {
-    await localLLMService.initModel();
-    res.json({ success: true });
+    if (localLLMService.status === 'loading') {
+      return res.status(409).json({ error: 'Model loading already in progress' });
+    }
+    if (localLLMService.status === 'loaded') {
+      return res.json({ success: true, message: 'Model already loaded' });
+    }
+    // Start load in background (consistent with download pattern)
+    localLLMService.initModel().catch(err => {
+      log('error', 'Model load failed', { error: err.message });
+    });
+    res.json({ success: true, message: 'Model loading started' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
