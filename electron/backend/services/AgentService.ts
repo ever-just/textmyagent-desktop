@@ -319,6 +319,7 @@ export class AgentService extends EventEmitter {
           toolsUsed: response.toolsUsed?.join(', '),
           inputTokens: response.inputTokens,
           outputTokens: response.outputTokens,
+          durationMs: response.durationMs,
           userMessagePreview: message.text.substring(0, 80),
         });
         // Save user message to DB even if we didn't respond
@@ -326,13 +327,27 @@ export class AgentService extends EventEmitter {
         return;
       }
 
+      // If response content is empty but tools were used (e.g. raw tool call
+      // was stripped after execution), skip sending — the tool action was the response.
+      if (response && (!response.content || response.content.trim() === '') && response.toolsUsed?.length > 0) {
+        log('info', 'Tool-only response — no text to send', {
+          from: userHandle,
+          chatGuid,
+          toolsUsed: response.toolsUsed?.join(', '),
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          durationMs: response.durationMs,
+        });
+        this.saveMessageToDb(chatGuid, userHandle, message.text, '');
+        return;
+      }
+
       if (response && response.content) {
-        // Simulate typing indicator: add a human-like delay before sending
-        // based on response length (roughly 30-50 WPM typing speed)
+        // Simulate typing indicator: add a brief human-like delay before sending
         const responseLen = response.content.length;
-        const minDelayMs = 800;
-        const maxDelayMs = 3000;
-        const typingDelayMs = Math.min(maxDelayMs, Math.max(minDelayMs, responseLen * 15));
+        const minDelayMs = 200;
+        const maxDelayMs = 1000;
+        const typingDelayMs = Math.min(maxDelayMs, Math.max(minDelayMs, responseLen * 8));
         await new Promise((resolve) => setTimeout(resolve, typingDelayMs));
 
         // Detect if user asked for links/URLs
@@ -388,6 +403,7 @@ export class AgentService extends EventEmitter {
             originalLength: formatted.originalLength,
             processedLength: formatted.processedLength,
             typingDelayMs,
+            inferenceDurationMs: response.durationMs,
           });
 
           this.emit('messageSent', {

@@ -71,8 +71,9 @@ wait tool:
 - Use when the user's message doesn't warrant a reply
 
 Memory Tools:
-- Use save_user_fact when a user shares a preference or important detail worth remembering.
-- Use get_user_facts to recall what you know about the user before responding.
+- AUTOMATICALLY call save_user_fact whenever the user shares their name, preferences, location, job, interests, or any personal detail — do NOT wait to be asked.
+- Do this silently — never tell the user you are saving a fact.
+- Use get_user_facts to recall what you know about the user when it would help your response.
 
 General:
 - Only use tools when they genuinely help.
@@ -82,8 +83,9 @@ General:
 const DEFAULT_FORMAT = `- Plain text only. No markdown, no bold, no headers, no code blocks.
 - No bullet points or numbered lists. Write like a text message.
 - No URLs unless the user specifically asked for a link.
-- One short paragraph max. If it's more than 2 sentences, it's too long.
-- Never split your reply into multiple paragraphs or messages.`;
+- Keep it concise — most replies should be 1-2 sentences.
+- For longer answers, use paragraph breaks (blank lines) between separate thoughts.
+- Each paragraph should be 1-2 sentences max.`;
 
 export class PromptBuilder {
   // Per-session random delimiter for Microsoft Spotlighting (task 3.14)

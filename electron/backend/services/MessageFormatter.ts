@@ -18,14 +18,14 @@ import type { FormatterOptions, FormatterResult } from '../types';
  */
 
 const DEFAULT_OPTIONS: FormatterOptions = {
-  maxResponseChars: 300,
-  hardMaxChars: 500,
-  maxChunks: 1,
-  chunkDelayMs: 1500,
+  maxResponseChars: 400,
+  hardMaxChars: 1200,
+  maxChunks: 3,
+  chunkDelayMs: 1000,
   stripMarkdown: true,
   allowUrls: false,
   maxCitations: 2,
-  enableSplitting: false,
+  enableSplitting: true,
 };
 
 // Patterns that indicate system prompt leakage
@@ -39,6 +39,14 @@ const SYSTEM_PROMPT_PATTERNS = [
   /my instructions are/i,
   /i was programmed to/i,
   /my system message/i,
+];
+
+// Patterns for raw tool call artifacts that leaked from the LLM (safety net)
+const TOOL_CALL_PATTERNS = [
+  /<\|?\/?tool_call\|?>[\s\S]*?<\|?\/?tool_call\|?>/gi,
+  /call:\s*\w+\(params:\s*\{[\s\S]*?\}\)/gi,
+  /<\|"\|>/g,
+  /<\|[a-z_]*\|>/gi,
 ];
 
 // PII patterns (simplified — catches common formats)
@@ -123,6 +131,25 @@ export class MessageFormatter {
           text: "I'm sorry, I can't share that information. Is there something else I can help you with?",
           flagged: true,
         };
+      }
+    }
+
+    // Strip raw tool call artifacts (safety net for Gemma 4 workaround)
+    let toolCallStripped = false;
+    for (const pattern of TOOL_CALL_PATTERNS) {
+      pattern.lastIndex = 0;
+      if (pattern.test(text)) {
+        pattern.lastIndex = 0;
+        text = text.replace(pattern, '');
+        toolCallStripped = true;
+      }
+    }
+    if (toolCallStripped) {
+      text = text.replace(/\n{3,}/g, '\n\n').trim();
+      logSecurityEvent('output_sanitized', null, { reason: 'tool_call_artifact_stripped' }, 'medium');
+      if (text.length === 0) {
+        // Entire response was tool call text — return empty (caller will handle)
+        return { text: '', flagged: true };
       }
     }
 

@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Planned
 - Multi-language support
 
+## [2.3.0] - 2026-04-16
+
+### Fixed
+- **Tool call text leak** — Gemma 4 sometimes outputs raw tool-call tokens as plain text instead of invoking the function API. Added two-layer defense: `stripAndExecuteRawToolCalls()` in LocalLLMService detects, executes, and strips 5 known patterns; MessageFormatter sanitize stage provides a safety net for any residuals.
+- **Memory system underuse** — Strengthened prompt instructions so the agent automatically calls `save_user_fact` when users share personal details, without being asked. Silent tool-only responses (no text, just tool execution) are now handled gracefully instead of sending empty messages.
+
+### Changed
+- **Multi-message splitting enabled by default** — Responses now split into up to 3 iMessage bubbles at paragraph boundaries. `maxChunks` raised from 1→3, `hardMaxChars` from 500→1200, `maxResponseChars` from 300→400. Prompt updated to encourage natural paragraph breaks instead of forbidding splits.
+- **Faster typing delay** — Reduced artificial typing indicator from 800–3000ms to 200–1000ms range (scale factor 15→8 ms/char) to make responses feel snappier.
+- **Inter-bubble delay** — Reduced `splitDelaySeconds` from 1.5→1.0s for quicker multi-bubble delivery.
+
+### Added
+- **Inference timing telemetry** — `durationMs` field added to `LLMResponse` interface. Logged as `inferenceDurationMs` in "Response sent", "wait" skip, and "tool-only" skip log entries for performance monitoring.
+- **Behavior simulation tests** — 24 new end-to-end simulations (BehaviorSimulation.test.ts) covering tool leak prevention, multi-bubble splitting, memory auto-save, typing delay, and inference telemetry.
+- **Tool call stripping tests** — 20 new unit tests (ToolCallStripping.test.ts) for regex detection, fallback execution, malformed JSON handling, and formatter safety net.
+
 ## [2.2.0] - 2026-04-15
 
 ### Added

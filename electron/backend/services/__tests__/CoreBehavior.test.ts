@@ -230,6 +230,10 @@ describe('Response length & multi-bubble splitting', () => {
   });
 
   it('should enforce hardMaxChars even when splitting is disabled', async () => {
+    // Clear settings so format() respects the explicit enableSplitting: false
+    delete _settingsStore['agent.multiMessageSplit'];
+    delete _settingsStore['agent.maxResponseChars'];
+
     const { MessageFormatter } = await vi.importActual<any>('../MessageFormatter');
     const realFormatter = new MessageFormatter();
 
@@ -376,8 +380,8 @@ describe('Typing indicator delay', () => {
     agent.stop();
   });
 
-  it('should delay at least 800ms before sending (minimum typing time)', async () => {
-    // Very short response — should still wait 800ms minimum
+  it('should delay at least 200ms before sending (minimum typing time)', async () => {
+    // Very short response — should still wait 200ms minimum
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Hi',
       inputTokens: 50,
@@ -388,18 +392,18 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('hey'));
 
-    // At 500ms — should NOT have sent yet
-    await vi.advanceTimersByTimeAsync(500);
+    // At 100ms — should NOT have sent yet
+    await vi.advanceTimersByTimeAsync(100);
     expect(iMessageService.sendMessage).not.toHaveBeenCalled();
 
-    // At 1000ms — should have sent (800ms min delay)
-    await vi.advanceTimersByTimeAsync(500);
+    // At 300ms — should have sent (200ms min delay)
+    await vi.advanceTimersByTimeAsync(200);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('should cap delay at 3000ms for long responses', async () => {
-    // Very long response — delay should not exceed 3000ms
+  it('should cap delay at 1000ms for long responses', async () => {
+    // Very long response — delay should not exceed 1000ms
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'X'.repeat(500),
       inputTokens: 100,
@@ -410,14 +414,14 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('tell me everything'));
 
-    // At 3500ms — should have sent (3000ms max delay)
-    await vi.advanceTimersByTimeAsync(3500);
+    // At 1200ms — should have sent (1000ms max delay)
+    await vi.advanceTimersByTimeAsync(1200);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('should scale delay based on response length', async () => {
-    // Medium response: 100 chars * 15ms/char = 1500ms (between min and max)
+    // Medium response: 100 chars * 8ms/char = 800ms (between min 200 and max 1000)
     vi.mocked(localLLMService.generateResponse).mockResolvedValue({
       content: 'Y'.repeat(100),
       inputTokens: 80,
@@ -428,12 +432,12 @@ describe('Typing indicator delay', () => {
 
     const promise = (agent as any).handleIncomingMessage(msg('question'));
 
-    // At 1000ms — should NOT have sent yet (need ~1500ms)
-    await vi.advanceTimersByTimeAsync(1000);
+    // At 500ms — should NOT have sent yet (need ~800ms)
+    await vi.advanceTimersByTimeAsync(500);
     expect(iMessageService.sendMessage).not.toHaveBeenCalled();
 
-    // At 2000ms — should have sent
-    await vi.advanceTimersByTimeAsync(1000);
+    // At 1000ms — should have sent
+    await vi.advanceTimersByTimeAsync(500);
     await promise;
     expect(iMessageService.sendMessage).toHaveBeenCalledTimes(1);
   });

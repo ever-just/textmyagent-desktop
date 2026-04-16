@@ -17,6 +17,7 @@ export interface LLMResponse {
   outputTokens: number;
   stopReason: string;
   toolsUsed: string[];
+  durationMs?: number;
 }
 
 // node-llama-cpp types — resolved at runtime via dynamic import
@@ -441,13 +442,20 @@ export class LocalLLMService {
 
       // Generate response with tool support
       const startTime = Date.now();
-      const response = await session.prompt(userMessage, {
+      let response = await session.prompt(userMessage, {
         maxTokens: this.maxTokens,
         temperature: this.temperature,
         functions: Object.keys(toolFunctions).length > 0 ? toolFunctions : undefined,
         maxParallelFunctionCalls: 1,
       });
       const durationMs = Date.now() - startTime;
+
+      // --- Raw tool call fallback (Gemma 4 workaround) ---
+      // Gemma 4 sometimes emits tool call tokens as plain text instead of
+      // invoking the registered function API.  Detect, execute, and strip.
+      response = await this.stripAndExecuteRawToolCalls(
+        response, toolsUsed, toolContext || { userId: 'unknown', chatGuid: 'unknown' }
+      );
 
       // Estimate token counts (node-llama-cpp doesn't expose exact counts easily)
       const estimatedInputTokens = Math.ceil((finalSystemPrompt.length + userMessage.length) / 4);
@@ -479,6 +487,7 @@ export class LocalLLMService {
         outputTokens: estimatedOutputTokens,
         stopReason: 'end_turn',
         toolsUsed,
+        durationMs,
       };
     } catch (error: any) {
       log('error', 'Local LLM generation error', { error: error.message, stack: error.stack });
@@ -503,6 +512,129 @@ export class LocalLLMService {
 
   setGpuLayers(layers: number): void {
     this.gpuLayers = layers;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Raw tool-call fallback  (Gemma 4 workaround)
+  // ---------------------------------------------------------------------------
+  // Known patterns emitted by Gemma 4 when it bypasses the function-calling API:
+  //   1. <|tool_call>call: tool_name(params: {...})<tool_call|>
+  //   2. <|tool_call|>call: tool_name(params: {...})<|/tool_call|>
+  //   3. call: tool_name(params: {...})  (bare, no delimiters)
+  //   4. <|"|"> token leaks inside JSON values  (llama.cpp #21316)
+  //   5. function_call / tool_call markers without proper structure
+  // ---------------------------------------------------------------------------
+  static readonly RAW_TOOL_CALL_PATTERNS: RegExp[] = [
+    // Pattern 1 & 2: Delimited tool calls (greedy match across variants)
+    /<\|?\/?tool_call\|?>[\s\S]*?<\|?\/?tool_call\|?>/gi,
+    // Pattern 3: Bare "call: name(params: {...})" — must be on its own line or the
+    // entire response to avoid false positives inside normal prose
+    /^call:\s*(\w+)\(params:\s*(\{[\s\S]*?\})\)\s*$/m,
+    // Pattern 5: Stray opening/closing markers left over
+    /<\|?\/?tool_call\|?>/gi,
+  ];
+
+  // Regex used to strip Gemma 4 <|"|"> token leak artifacts (llama.cpp #21316)
+  static readonly TOKEN_LEAK_PATTERN = /<\|"\|>/g;
+
+  // Extraction regex — tries to pull tool name + JSON params from any matched text
+  private static readonly TOOL_EXTRACT_RE =
+    /(?:call:\s*)?(\w+)\s*\(\s*(?:params:\s*)?(\{[\s\S]*?\})\s*\)/;
+
+  /**
+   * Detect raw tool-call text in the LLM response, attempt to execute the
+   * tools via ToolRegistry, and strip the artifacts from the output.
+   */
+  async stripAndExecuteRawToolCalls(
+    response: string,
+    toolsUsed: string[],
+    toolContext: ToolCallContext
+  ): Promise<string> {
+    if (!response || response.length === 0) return response;
+
+    let cleaned = response;
+    let anyDetected = false;
+
+    // Pass 1: Find and execute delimited / bare tool calls
+    for (const pattern of LocalLLMService.RAW_TOOL_CALL_PATTERNS) {
+      // Reset lastIndex for global patterns
+      pattern.lastIndex = 0;
+
+      const matches = cleaned.match(pattern);
+      if (!matches) continue;
+
+      for (const match of matches) {
+        anyDetected = true;
+        const extracted = LocalLLMService.TOOL_EXTRACT_RE.exec(match);
+
+        if (extracted) {
+          const toolName = extracted[1];
+          let toolParams: Record<string, unknown> = {};
+          try {
+            // Clean token-leak artifacts from JSON before parsing
+            const cleanedJson = extracted[2].replace(LocalLLMService.TOKEN_LEAK_PATTERN, '"');
+            toolParams = JSON.parse(cleanedJson);
+          } catch (parseErr) {
+            log('warn', 'Failed to parse raw tool call params', {
+              toolName,
+              rawParams: extracted[2].substring(0, 200),
+              error: (parseErr as Error).message,
+            });
+          }
+
+          // Execute the tool if it looks valid
+          try {
+            log('info', 'Executing raw tool call fallback', { toolName, params: JSON.stringify(toolParams).substring(0, 200) });
+            const result = await toolRegistry.executeToolCall(
+              {
+                id: `raw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                name: toolName,
+                input: toolParams,
+              },
+              toolContext
+            );
+            if (!toolsUsed.includes(toolName)) {
+              toolsUsed.push(toolName);
+            }
+            log('info', 'Raw tool call executed successfully', {
+              toolName,
+              isError: result.isError,
+              outputPreview: result.content.substring(0, 100),
+            });
+          } catch (execErr) {
+            log('error', 'Raw tool call execution failed', {
+              toolName,
+              error: (execErr as Error).message,
+            });
+          }
+        } else {
+          log('warn', 'Detected raw tool call text but could not extract tool name/params', {
+            matchPreview: match.substring(0, 200),
+          });
+        }
+
+        // Strip the matched text from the response regardless of execution success
+        cleaned = cleaned.replace(match, '');
+      }
+    }
+
+    // Pass 2: Clean residual token-leak artifacts (<|"|"> etc.)
+    cleaned = cleaned.replace(LocalLLMService.TOKEN_LEAK_PATTERN, '');
+    // Remove other common Gemma 4 leaked special tokens
+    cleaned = cleaned.replace(/<\|[a-z_]*\|>/gi, '');
+
+    // Normalize whitespace left behind
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+    if (anyDetected) {
+      log('info', 'Raw tool call artifacts stripped from response', {
+        originalLength: response.length,
+        cleanedLength: cleaned.length,
+        toolsUsed: toolsUsed.join(', '),
+      });
+    }
+
+    return cleaned;
   }
 }
 
