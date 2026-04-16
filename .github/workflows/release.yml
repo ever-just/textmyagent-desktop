@@ -40,7 +40,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npx electron-rebuild -o better-sqlite3
 
       - name: Install dashboard dependencies
         run: cd dashboard && npm ci
@@ -83,7 +85,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npx electron-rebuild -o better-sqlite3
 
       - name: Install dashboard dependencies
         run: cd dashboard && npm ci
