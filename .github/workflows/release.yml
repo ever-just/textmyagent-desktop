@@ -79,11 +79,57 @@ jobs:
             build/*.zip
           if-no-files-found: error
 
-  # NOTE: x64 (Intel) build removed — macos-13 runners deprecated and
-  # Gemma 4 with Metal GPU is Apple Silicon only. Add back when needed.
+  build-mac-x64:
+    needs: test
+    runs-on: macos-13  # Intel runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          npx electron-rebuild -o better-sqlite3
+
+      - name: Install dashboard dependencies
+        run: cd dashboard && npm ci
+
+      - name: Build custom llama.cpp for Gemma 4
+        run: |
+          LLAMA_DIR="node_modules/node-llama-cpp/llama/llama.cpp"
+          rm -rf "$LLAMA_DIR"
+          mkdir -p "$(dirname "$LLAMA_DIR")"
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+          echo '{"tag": "latest"}' > "node_modules/node-llama-cpp/llama/llama.cpp.info.json"
+          npx --no node-llama-cpp source build --gpu metal
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package x64
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npx electron-builder --mac dmg zip --x64 --publish never
+
+      - name: Upload x64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-x64
+          path: |
+            build/*.dmg
+            build/*.zip
+          if-no-files-found: error
 
   publish:
-    needs: [build-mac-arm64]
+    needs: [build-mac-arm64, build-mac-x64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,10 +140,18 @@ jobs:
           name: mac-arm64
           path: artifacts/arm64
 
+      - name: Download x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-x64
+          path: artifacts/x64
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/arm64/*
+          files: |
+            artifacts/arm64/*
+            artifacts/x64/*
           generate_release_notes: true
           draft: false
           prerelease: false
