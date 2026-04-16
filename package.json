@@ -1,6 +1,6 @@
 {
   "name": "textmyagent-desktop",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "AI Assistant for iMessage - Desktop App",
   "main": "dist/electron/main.js",
   "scripts": {
