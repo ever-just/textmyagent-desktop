@@ -443,6 +443,7 @@ router.get('/model/status', async (_req: Request, res: Response) => {
       isDownloaded: localLLMService.isModelDownloaded(),
       isLoaded: localLLMService.isConfigured(),
       downloadProgress: localLLMService.downloadProgress,
+      errorMessage: localLLMService.errorMessage,
     });
   } catch (error) {
     log('error', 'Get model status failed', { error: String(error) });

@@ -38,6 +38,7 @@ export class LocalLLMService {
   private initialized = false;
   private _status: ModelStatus = 'not_downloaded';
   private _downloadProgress = 0;
+  private _errorMessage: string | null = null;
 
   // Cache for dynamic import of node-llama-cpp (ESM module in CommonJS context)
   private _llamaModule: any = null;
@@ -52,6 +53,10 @@ export class LocalLLMService {
 
   get downloadProgress(): number {
     return this._downloadProgress;
+  }
+
+  get errorMessage(): string | null {
+    return this._errorMessage;
   }
 
   private async getLlamaModule(): Promise<any> {
@@ -106,6 +111,7 @@ export class LocalLLMService {
   ): Promise<string> {
     this._status = 'downloading';
     this._downloadProgress = 0;
+    this._errorMessage = null;
 
     try {
       const { createModelDownloader } = await this.getLlamaModule();
@@ -148,7 +154,8 @@ export class LocalLLMService {
       return modelPath;
     } catch (error: any) {
       this._status = 'error';
-      log('error', 'Model download failed', { error: error.message });
+      this._errorMessage = error.message || String(error);
+      log('error', 'Model download failed', { error: error.message, stack: error.stack });
       throw error;
     }
   }

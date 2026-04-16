@@ -322,7 +322,7 @@ export default function SetupPage() {
             clearInterval(downloadPollRef.current!);
             downloadPollRef.current = null;
             setDownloading(false);
-            setModelError('Download failed. Please try again.');
+            setModelError(s.errorMessage || 'Download failed. Please try again.');
           }
         } catch {
           clearInterval(downloadPollRef.current!);

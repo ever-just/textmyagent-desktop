@@ -99,6 +99,7 @@ export async function getModelStatus() {
     isDownloaded: boolean;
     isLoaded: boolean;
     downloadProgress: number;
+    errorMessage?: string;
   }>('/model/status');
 }
 
