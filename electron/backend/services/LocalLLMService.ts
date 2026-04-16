@@ -175,12 +175,10 @@ export class LocalLLMService {
     try {
       const { getLlama } = await this.getLlamaModule();
 
-      // Try to use a locally-built llama.cpp binary first, fall back to default
-      try {
-        this.llama = await getLlama('lastBuild');
-      } catch {
-        this.llama = await getLlama();
-      }
+      log('info', 'Initializing llama.cpp engine...');
+      // Use custom-built llama.cpp (b8808+) which supports Gemma 4 architecture.
+      // The local build with Metal is created via: npx node-llama-cpp source download --release latest && npx node-llama-cpp source build --gpu metal
+      this.llama = await getLlama({ gpu: 'metal' });
 
       // Resolve model path
       let modelPath = this.getModelFilePath();
@@ -222,7 +220,8 @@ export class LocalLLMService {
       if (this._status !== 'not_downloaded') {
         this._status = 'error';
       }
-      log('error', 'Failed to load local LLM', { error: error.message });
+      this._errorMessage = error.message || String(error);
+      log('error', 'Failed to load local LLM', { error: error.message, stack: error.stack });
       throw error;
     }
   }
