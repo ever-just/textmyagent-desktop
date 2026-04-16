@@ -189,9 +189,16 @@ export class LocalLLMService {
       const { getLlama } = await this.getLlamaModule();
 
       log('info', 'Initializing llama.cpp engine...');
-      // Use custom-built llama.cpp (b8808+) which supports Gemma 4 architecture.
-      // The local build with Metal is created via: npx node-llama-cpp source download --release latest && npx node-llama-cpp source build --gpu metal
-      this.llama = await getLlama({ gpu: 'metal' });
+      // Custom-built llama.cpp (b8808+) supports Gemma 4 architecture.
+      // Try Metal first (Apple Silicon); fall back to auto (Intel Macs / no Metal).
+      try {
+        this.llama = await getLlama({ gpu: 'metal', debug: !!process.env.NODE_LLAMA_CPP_DEBUG });
+        log('info', 'llama.cpp initialized with Metal GPU');
+      } catch (metalErr: any) {
+        log('warn', 'Metal GPU init failed, falling back to auto', { error: metalErr.message });
+        this.llama = await getLlama({ debug: !!process.env.NODE_LLAMA_CPP_DEBUG });
+        log('info', 'llama.cpp initialized with auto GPU detection');
+      }
 
       // Resolve model path
       let modelPath = this.getModelFilePath();

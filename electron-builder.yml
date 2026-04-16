@@ -12,13 +12,21 @@ files:
   - "!**/*.ts"
   - "!**/*.map"
   - "!**/node_modules/*/{test,__tests__,tests,*.md}"
+  # node-llama-cpp: exclude all platform bins, then include only current platform
+  - "!node_modules/node-llama-cpp/bins/**/*"
+  - "node_modules/node-llama-cpp/bins/${os}-${arch}*/**/*"
+  - "!node_modules/node-llama-cpp/llama/localBuilds/**/*"
+  - "node_modules/node-llama-cpp/llama/localBuilds/${os}-${arch}*/**/*"
+  - "!node_modules/@node-llama-cpp/*/bins/**/*"
+  - "node_modules/@node-llama-cpp/${os}-${arch}*/bins/**/*"
 
 asarUnpack:
   - "**/*.node"
   - "**/better-sqlite3/**"
   - "**/node-mac-contacts/**"
-  - "**/node-llama-cpp/**"
-  - "**/@node-llama-cpp/**"
+  - "node_modules/node-llama-cpp/bins"
+  - "node_modules/node-llama-cpp/llama/localBuilds"
+  - "node_modules/@node-llama-cpp/*"
   - "**/*.metal"
   - "**/*.so"
   - "**/*.dylib"
