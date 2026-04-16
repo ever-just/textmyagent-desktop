@@ -68,6 +68,7 @@ mac:
         - arm64
 
 dmg:
+  writeUpdateInfo: false
   backgroundColor: "#ffffff"
   iconSize: 100
   window:
