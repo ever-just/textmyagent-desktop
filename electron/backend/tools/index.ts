@@ -4,7 +4,6 @@ import { getUserFacts, getUserFactsDefinition } from './getUserFacts';
 import { searchHistory, searchHistoryDefinition } from './searchHistory';
 import { setReminder, setReminderDefinition } from './setReminder';
 import { createTrigger, createTriggerDefinition } from './createTrigger';
-import { reactToMessage, reactToMessageDefinition } from './reactToMessage';
 import { waitTool, waitToolDefinition } from './waitTool';
 
 /**
@@ -17,6 +16,5 @@ export function registerAllTools(): void {
   toolRegistry.registerCustomTool(searchHistoryDefinition, searchHistory);
   toolRegistry.registerCustomTool(setReminderDefinition, setReminder);
   toolRegistry.registerCustomTool(createTriggerDefinition, createTrigger);
-  toolRegistry.registerCustomTool(reactToMessageDefinition, reactToMessage);
   toolRegistry.registerCustomTool(waitToolDefinition, waitTool);
 }

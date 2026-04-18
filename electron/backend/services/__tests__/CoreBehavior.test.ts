@@ -576,10 +576,13 @@ describe('Double-text queue serialization', () => {
     await vi.advanceTimersByTimeAsync(10000);
   });
 
-  it('should process queued messages in FIFO order after lock releases', async () => {
+  it('should coalesce queued messages into one reply after lock releases (Phase 3B)', async () => {
+    // Phase 3B: when a user fires multiple messages while we are generating,
+    // the queued fragments are merged into a single combined prompt on drain,
+    // so the LLM replies once to the full thought instead of N times to fragments.
     const responses: string[] = [];
+    const llmInputs: string[] = [];
 
-    // Track send order
     vi.mocked(iMessageService.sendMessage).mockImplementation(async (_chat: string, text: string) => {
       responses.push(text);
       return true;
@@ -590,20 +593,23 @@ describe('Double-text queue serialization', () => {
 
     vi.mocked(localLLMService.generateResponse)
       .mockReturnValueOnce(firstPromise as any)
-      .mockImplementation(async (text: string) => ({
-        content: `Reply to: ${text}`,
-        inputTokens: 50,
-        outputTokens: 20,
-        stopReason: 'end_turn',
-        toolsUsed: [],
-      }));
+      .mockImplementation(async (text: string) => {
+        llmInputs.push(text);
+        return {
+          content: `Reply to: ${text}`,
+          inputTokens: 50,
+          outputTokens: 20,
+          stopReason: 'end_turn',
+          toolsUsed: [],
+        };
+      });
 
-    // Send 3 messages rapidly
+    // Send 3 messages rapidly — alpha is processing, beta + gamma queue
     const p1 = (agent as any).handleIncomingMessage(msg('alpha'));
     (agent as any).handleIncomingMessage(msg('beta'));
     (agent as any).handleIncomingMessage(msg('gamma'));
 
-    // Release first
+    // Release alpha
     resolveFirst!({
       content: 'Reply to: alpha',
       inputTokens: 50,
@@ -617,14 +623,33 @@ describe('Double-text queue serialization', () => {
     await p1;
     await vi.advanceTimersByTimeAsync(30000);
 
-    // Responses should be in order: alpha, then beta, then gamma
+    // Exactly TWO LLM responses: one for alpha, one for the beta+gamma merge.
     expect(responses[0]).toBe('Reply to: alpha');
-    if (responses.length >= 2) {
-      expect(responses[1]).toBe('Reply to: beta');
-    }
-    if (responses.length >= 3) {
-      expect(responses[2]).toBe('Reply to: gamma');
-    }
+    expect(responses).toHaveLength(2);
+    expect(responses[1]).toBe('Reply to: beta\ngamma');
+
+    // The second LLM call must have seen both queued fragments joined.
+    expect(llmInputs[0]).toBe('beta\ngamma');
+  });
+
+  it('coalesceQueuedMessages returns the single message unchanged (Phase 3B)', () => {
+    const m = msg('lone message');
+    const out = (agent as any).coalesceQueuedMessages([m]);
+    expect(out).toBe(m);
+  });
+
+  it('coalesceQueuedMessages merges multiple messages, keeping latest metadata (Phase 3B)', () => {
+    const a = { ...msg('hi there'), guid: 'a', handleId: '+15551234567' };
+    const b = { ...msg(''), guid: 'b', handleId: '+15551234567' };
+    const c = { ...msg('can you help'), guid: 'c', handleId: '+15551234567' };
+    const out = (agent as any).coalesceQueuedMessages([a, b, c]);
+    // Empty-text fragments dropped; latest guid preserved
+    expect(out.text).toBe('hi there\ncan you help');
+    expect(out.guid).toBe('c');
+    expect(out.handleId).toBe('+15551234567');
+    // Source messages untouched
+    expect(a.text).toBe('hi there');
+    expect(c.text).toBe('can you help');
   });
 
   it('should include double-text context — queued message sees first response in history', async () => {

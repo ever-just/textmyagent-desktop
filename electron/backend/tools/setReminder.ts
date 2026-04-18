@@ -41,13 +41,17 @@ export async function setReminder(
 
   const db = getDatabase();
   const id = crypto.randomUUID();
+  const dueAtIso = dueAt.toISOString();
 
+  // scheduled_at is declared NOT NULL on the v1 reminders table; v8 added due_at
+  // as an additive column. Bind both to the same ISO string so ReminderService
+  // (which reads due_at) and the NOT NULL constraint are both satisfied.
   db.prepare(`
-    INSERT INTO reminders (id, user_id, chat_guid, message, due_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, context.userId, context.chatGuid, message.trim(), dueAt.toISOString());
+    INSERT INTO reminders (id, user_id, message, due_at, scheduled_at, chat_guid)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, context.userId, message.trim(), dueAtIso, dueAtIso, context.chatGuid);
 
-  log('info', 'Reminder created', { id, userId: context.userId, dueAt: dueAt.toISOString() });
+  log('info', 'Reminder created', { id, userId: context.userId, dueAt: dueAtIso });
 
   const formattedTime = dueAt.toLocaleString();
   return `Reminder set for ${formattedTime}: "${message.trim()}" (id: ${id})`;

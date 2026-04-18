@@ -142,7 +142,6 @@ const ALLOWED_SETTINGS: Record<string, 'string' | 'number' | 'boolean' | 'object
   'tools.saveUserFact': 'boolean',
   'tools.getUserFacts': 'boolean',
   'tools.searchHistory': 'boolean',
-  'tools.reactions': 'boolean',
   'tools.waitTool': 'boolean',
   // Contact allowlist
   'agent.replyMode': 'string',

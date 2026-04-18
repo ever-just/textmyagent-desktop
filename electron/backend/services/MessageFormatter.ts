@@ -41,11 +41,33 @@ const SYSTEM_PROMPT_PATTERNS = [
   /my system message/i,
 ];
 
-// Patterns for raw tool call artifacts that leaked from the LLM (safety net)
+// Patterns for raw tool call artifacts that leaked from the LLM (safety net).
+// Kept in sync with LocalLLMService.RAW_TOOL_CALL_PATTERNS — see
+// docs/RELIABILITY_IMPLEMENTATION.md §3 P0.3.
+const TOOL_CALL_TOOL_NAMES = [
+  'wait',
+  'save_user_fact',
+  'get_user_facts',
+  'search_history',
+  'set_reminder',
+  'create_trigger',
+  'react_to_message', // removed tool — keep as regression scrub
+].join('|');
 const TOOL_CALL_PATTERNS = [
+  // 1. Delimited tool calls (both pipe variants)
   /<\|?\/?tool_call\|?>[\s\S]*?<\|?\/?tool_call\|?>/gi,
+  // 2. Gemma-style fenced tool_code blocks
+  /```tool_code\b[\s\S]*?```/gi,
+  // 3. call:-prefixed invocations
   /call:\s*\w+\(params:\s*\{[\s\S]*?\}\)/gi,
+  // 4. Bare whole-line tool-name invocations (known names only)
+  new RegExp(
+    `^\\s*(?:call:\\s*)?(?:${TOOL_CALL_TOOL_NAMES})\\s*\\([^\\n]*\\)\\s*$`,
+    'gm'
+  ),
+  // 5. Residual token-leak artifacts
   /<\|"\|>/g,
+  // 6. Stray special-token markers
   /<\|[a-z_]*\|>/gi,
 ];
 

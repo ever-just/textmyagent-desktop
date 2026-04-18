@@ -129,7 +129,6 @@ vi.mock('../PromptBuilder', () => ({
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
     getEnabledDefinitions: vi.fn().mockReturnValue([
-      { name: 'react_to_message', description: 'Send tapback', inputSchema: {} },
       { name: 'wait', description: 'Skip response', inputSchema: {} },
     ]),
     executeToolCall: vi.fn(),
@@ -617,7 +616,7 @@ describe('Tool call end-to-end (LocalLLMService agentic loop)', () => {
       inputTokens: 100,
       outputTokens: 30,
       stopReason: 'end_turn',
-      toolsUsed: ['react_to_message', 'wait'],
+      toolsUsed: ['wait'],
     } as any);
 
     const m = createMsg('👍');

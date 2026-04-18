@@ -116,7 +116,6 @@ export class ToolRegistry {
       search_history: 'tools.searchHistory',
       set_reminder: 'tools.reminders',
       create_trigger: 'tools.triggers',
-      react_to_message: 'tools.reactions',
       wait: 'tools.waitTool',
     };
 

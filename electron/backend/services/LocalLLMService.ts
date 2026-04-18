@@ -681,6 +681,111 @@ export class LocalLLMService {
     }
   }
 
+  /**
+   * Phase 2C: Extract concrete user facts from a transcript using an ephemeral session.
+   *
+   * Mirrors generateSummary's safety properties (no tools, no pool, no PromptBuilder,
+   * tight 30s timeout). The model is asked for a JSON array of short fact strings.
+   *
+   * Returns an array of de-duplicated fact strings, or [] on failure / no facts.
+   * Never throws.
+   */
+  async extractFactsFromTranscript(
+    transcript: string,
+    options?: { maxTokens?: number; temperature?: number }
+  ): Promise<string[]> {
+    if (!this.model || !this.context) {
+      try { await this.initModel(); } catch { return []; }
+      if (!this.model || !this.context) return [];
+    }
+
+    const maxTokens = options?.maxTokens ?? 300;
+    const temperature = options?.temperature ?? 0.2;
+    const systemPrompt =
+      'You extract concrete personal facts about the user from a conversation. ' +
+      'Return ONLY a JSON array of short strings. Each string is one fact (e.g. ' +
+      '"name is Alex", "works at Google", "lives in NYC", "likes oat milk lattes"). ' +
+      'Only include facts explicitly stated by the user. Return [] if none. ' +
+      'No preamble, no markdown, no explanation — JUST the JSON array.';
+    const userPrompt =
+      `Conversation transcript:\n\n${transcript}\n\nFacts JSON array:`;
+
+    let session: any = null;
+    try {
+      const { LlamaChatSession } = await this.getLlamaModule();
+      if (!this.context) return [];
+
+      session = new LlamaChatSession({
+        contextSequence: this.context.getSequence(),
+        systemPrompt,
+      });
+
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), 30_000);
+
+      let raw: string;
+      try {
+        raw = await session.prompt(userPrompt, {
+          maxTokens,
+          temperature,
+          signal: abortController.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      return this.parseFactsJson(raw);
+    } catch (err) {
+      log('warn', 'extractFactsFromTranscript failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    } finally {
+      try { session?.dispose?.(); } catch { /* non-fatal */ }
+    }
+  }
+
+  /**
+   * Parse the LLM's JSON-array response into a de-duplicated list of facts.
+   * Tolerates common LLM artifacts: leading prose, markdown fences, trailing text.
+   * Caps each fact length and total count to avoid runaway output.
+   */
+  private parseFactsJson(raw: string): string[] {
+    if (!raw) return [];
+    // Strip common fences / preambles
+    let cleaned = raw.trim();
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+
+    // Find the first JSON array in the string
+    const match = cleaned.match(/\[[\s\S]*?\]/);
+    if (!match) return [];
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch {
+      return [];
+    }
+
+    if (!Array.isArray(parsed)) return [];
+
+    const MAX_FACTS = 10;
+    const MAX_LEN = 200;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== 'string') continue;
+      const trimmed = item.trim().slice(0, MAX_LEN);
+      if (trimmed.length < 3) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(trimmed);
+      if (out.length >= MAX_FACTS) break;
+    }
+    return out;
+  }
+
   async generateResponse(
     userMessage: string,
     conversationHistory: Message[] = [],
@@ -875,12 +980,12 @@ export class LocalLLMService {
       clearTimeout(timeoutId);
       const durationMs = Date.now() - startTime;
 
-      // --- Raw tool call fallback (Gemma 4 workaround) ---
-      // Gemma 4 sometimes emits tool call tokens as plain text instead of
-      // invoking the registered function API.  Detect, execute, and strip.
-      response = await this.stripAndExecuteRawToolCalls(
-        response, toolsUsed, toolContext || { userId: 'unknown', chatGuid: 'unknown' }
-      );
+      // --- Tool-call artifact sanitization (Gemma 4 workaround) ---
+      // Gemma 4 sometimes emits tool-call tokens as plain text instead of
+      // invoking the registered function API.  We STRIP these from the user-
+      // facing response so they don't leak into iMessage.  We no longer try
+      // to execute them — see docs/RELIABILITY_IMPLEMENTATION.md §3 P0.3.
+      response = this.sanitizeToolCallArtifacts(response);
 
       // Estimate token counts (node-llama-cpp doesn't expose exact counts easily)
       const estimatedInputTokens = Math.ceil((finalSystemPrompt.length + userMessage.length) / 4);
@@ -936,122 +1041,99 @@ export class LocalLLMService {
   }
 
   // ---------------------------------------------------------------------------
-  // Raw tool-call fallback  (Gemma 4 workaround)
+  // Tool-call artifact sanitization  (Gemma 4 workaround)
   // ---------------------------------------------------------------------------
-  // Known patterns emitted by Gemma 4 when it bypasses the function-calling API:
-  //   1. <|tool_call>call: tool_name(params: {...})<tool_call|>
-  //   2. <|tool_call|>call: tool_name(params: {...})<|/tool_call|>
-  //   3. call: tool_name(params: {...})  (bare, no delimiters)
-  //   4. <|"|"> token leaks inside JSON values  (llama.cpp #21316)
-  //   5. function_call / tool_call markers without proper structure
+  // Gemma 4 sometimes bypasses node-llama-cpp's function-calling API and emits
+  // tool calls as plain text. We strip these artifacts from the user-facing
+  // response. We do NOT try to execute them — see the 11-hour trial analysis
+  // in docs/RELIABILITY_IMPLEMENTATION.md §2 (root cause) and §3 P0.3.
+  //
+  // Patterns recognized:
+  //   1. <|tool_call>...<tool_call|>      (delimited, both pipe variants)
+  //   2. ```tool_code\n...\n```           (Gemma fenced tool-code blocks)
+  //   3. bare "name(arg: value)" on its   (whole-line match, known tool
+  //      own line for known tool names     names only — avoids prose false
+  //      listed in TOOL_NAMES              positives like "wait a minute")
+  //   4. <|"|">, <|eos|>, <|...|>          (residual special-token leaks)
   // ---------------------------------------------------------------------------
+
+  // Known tool names that might leak. When removing a tool, keep its name
+  // here for a release or two as a regression guard against stale model
+  // behavior (e.g. `react_to_message` was removed in P0.1 but Gemma may
+  // still emit it until the next retrain).
+  private static readonly TOOL_NAMES = [
+    'wait',
+    'save_user_fact',
+    'get_user_facts',
+    'search_history',
+    'set_reminder',
+    'create_trigger',
+    'react_to_message', // removed tool — keep as regression scrub
+  ];
+
+  private static readonly TOOL_NAME_ALT = LocalLLMService.TOOL_NAMES.join('|');
+
   static readonly RAW_TOOL_CALL_PATTERNS: RegExp[] = [
-    // Pattern 1 & 2: Delimited tool calls (greedy match across variants)
+    // 1. Delimited tool calls — greedy across both pipe variants
     /<\|?\/?tool_call\|?>[\s\S]*?<\|?\/?tool_call\|?>/gi,
-    // Pattern 3: Bare "call: name(params: {...})" — must be on its own line or the
-    // entire response to avoid false positives inside normal prose
-    /^call:\s*(\w+)\(params:\s*(\{[\s\S]*?\})\)\s*$/m,
-    // Pattern 5: Stray opening/closing markers left over
+    // 2. Gemma-style fenced tool_code blocks
+    /```tool_code\b[\s\S]*?```/gi,
+    // 3. Bare tool-call lines — only match a whole line that is JUST a known
+    //    tool-name invocation. The `^ ... $` with `m` flag anchors to line
+    //    start/end so prose containing the same words (e.g. "please wait")
+    //    is not matched.
+    new RegExp(
+      `^\\s*(?:call:\\s*)?(?:${LocalLLMService.TOOL_NAME_ALT})\\s*\\([^\\n]*\\)\\s*$`,
+      'gm'
+    ),
+    // 4. Stray delimiter markers left behind when the block was malformed
     /<\|?\/?tool_call\|?>/gi,
   ];
 
-  // Regex used to strip Gemma 4 <|"|"> token leak artifacts (llama.cpp #21316)
+  // Gemma 4 <|"|"> token-leak artifact (llama.cpp #21316)
   static readonly TOKEN_LEAK_PATTERN = /<\|"\|>/g;
 
-  // Extraction regex — tries to pull tool name + JSON params from any matched text
-  private static readonly TOOL_EXTRACT_RE =
-    /(?:call:\s*)?(\w+)\s*\(\s*(?:params:\s*)?(\{[\s\S]*?\})\s*\)/;
-
   /**
-   * Detect raw tool-call text in the LLM response, attempt to execute the
-   * tools via ToolRegistry, and strip the artifacts from the output.
+   * Strip tool-call syntax artifacts from a model response before it is
+   * delivered to the user. Sanitize-only — does NOT execute tools.
    */
-  async stripAndExecuteRawToolCalls(
-    response: string,
-    toolsUsed: string[],
-    toolContext: ToolCallContext
-  ): Promise<string> {
+  sanitizeToolCallArtifacts(response: string): string {
     if (!response || response.length === 0) return response;
 
     let cleaned = response;
     let anyDetected = false;
 
-    // Pass 1: Find and execute delimited / bare tool calls
     for (const pattern of LocalLLMService.RAW_TOOL_CALL_PATTERNS) {
-      // Reset lastIndex for global patterns
       pattern.lastIndex = 0;
-
-      const matches = cleaned.match(pattern);
-      if (!matches) continue;
-
-      for (const match of matches) {
+      if (pattern.test(cleaned)) {
+        pattern.lastIndex = 0;
+        cleaned = cleaned.replace(pattern, '');
         anyDetected = true;
-        const extracted = LocalLLMService.TOOL_EXTRACT_RE.exec(match);
-
-        if (extracted) {
-          const toolName = extracted[1];
-          let toolParams: Record<string, unknown> = {};
-          try {
-            // Clean token-leak artifacts from JSON before parsing
-            const cleanedJson = extracted[2].replace(LocalLLMService.TOKEN_LEAK_PATTERN, '"');
-            toolParams = JSON.parse(cleanedJson);
-          } catch (parseErr) {
-            log('warn', 'Failed to parse raw tool call params', {
-              toolName,
-              rawParams: extracted[2].substring(0, 200),
-              error: (parseErr as Error).message,
-            });
-          }
-
-          // Execute the tool if it looks valid
-          try {
-            log('info', 'Executing raw tool call fallback', { toolName, params: JSON.stringify(toolParams).substring(0, 200) });
-            const result = await toolRegistry.executeToolCall(
-              {
-                id: `raw_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                name: toolName,
-                input: toolParams,
-              },
-              toolContext
-            );
-            if (!toolsUsed.includes(toolName)) {
-              toolsUsed.push(toolName);
-            }
-            log('info', 'Raw tool call executed successfully', {
-              toolName,
-              isError: result.isError,
-              outputPreview: result.content.substring(0, 100),
-            });
-          } catch (execErr) {
-            log('error', 'Raw tool call execution failed', {
-              toolName,
-              error: (execErr as Error).message,
-            });
-          }
-        } else {
-          log('warn', 'Detected raw tool call text but could not extract tool name/params', {
-            matchPreview: match.substring(0, 200),
-          });
-        }
-
-        // Strip the matched text from the response regardless of execution success
-        cleaned = cleaned.replace(match, '');
       }
     }
 
-    // Pass 2: Clean residual token-leak artifacts (<|"|"> etc.)
-    cleaned = cleaned.replace(LocalLLMService.TOKEN_LEAK_PATTERN, '');
-    // Remove other common Gemma 4 leaked special tokens
-    cleaned = cleaned.replace(/<\|[a-z_]*\|>/gi, '');
+    // Residual Gemma 4 <|"|"> token leaks
+    if (LocalLLMService.TOKEN_LEAK_PATTERN.test(cleaned)) {
+      LocalLLMService.TOKEN_LEAK_PATTERN.lastIndex = 0;
+      cleaned = cleaned.replace(LocalLLMService.TOKEN_LEAK_PATTERN, '');
+      anyDetected = true;
+    }
+
+    // Generic leaked special tokens like <|eos|>, <|bos|>, etc.
+    const genericTokenPattern = /<\|[a-z_]*\|>/gi;
+    if (genericTokenPattern.test(cleaned)) {
+      genericTokenPattern.lastIndex = 0;
+      cleaned = cleaned.replace(genericTokenPattern, '');
+      anyDetected = true;
+    }
 
     // Normalize whitespace left behind
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
 
     if (anyDetected) {
-      log('info', 'Raw tool call artifacts stripped from response', {
+      log('info', 'Tool-call artifacts stripped from response', {
         originalLength: response.length,
         cleanedLength: cleaned.length,
-        toolsUsed: toolsUsed.join(', '),
       });
     }
 

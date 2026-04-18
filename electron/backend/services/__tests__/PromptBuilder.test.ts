@@ -155,6 +155,49 @@ describe('PromptBuilder', () => {
     });
   });
 
+  describe('section ordering invariant (Phase 1C)', () => {
+    // Cacheable (static) sections MUST precede any non-cacheable (dynamic) section
+    // so node-llama-cpp can reuse the KV-cache prefix across requests.
+    const assertCacheableBeforeDynamic = (sections: { tag: string; cacheable: boolean }[]) => {
+      let seenDynamic = false;
+      for (const s of sections) {
+        if (!s.cacheable) {
+          seenDynamic = true;
+        } else if (seenDynamic) {
+          throw new Error(
+            `Cacheable section [${s.tag}] appears AFTER a dynamic section. ` +
+              `This breaks KV-cache prefix reuse.`,
+          );
+        }
+      }
+    };
+
+    it('places all cacheable sections before dynamic sections (no context)', () => {
+      const sections = builder.buildSections();
+      assertCacheableBeforeDynamic(sections);
+    });
+
+    it('places all cacheable sections before dynamic sections (full context)', () => {
+      const sections = builder.buildSections({
+        date: 'Mon Jan 1 2026',
+        contactName: 'Alice',
+        chatType: 'group',
+        participantCount: 3,
+        userFacts: [{ content: 'likes coffee' } as any],
+        conversationSummary: 'We discussed weather.',
+        enabledTools: ['wait', 'set_reminder'],
+      });
+      assertCacheableBeforeDynamic(sections);
+    });
+
+    it('maintains cacheable prefix ordering: IDENTITY, PERSONA, GUIDELINES, SAFETY, FORMAT, TOOL_USAGE', () => {
+      const sections = builder.buildSections();
+      const cacheableTags = sections.filter((s) => s.cacheable).map((s) => s.tag);
+      const expectedPrefix = ['IDENTITY', 'PERSONA', 'GUIDELINES', 'SAFETY', 'FORMAT', 'TOOL_USAGE'];
+      expect(cacheableTags.slice(0, expectedPrefix.length)).toEqual(expectedPrefix);
+    });
+  });
+
   describe('settings override', () => {
     it('uses setting value when getSetting returns a value', async () => {
       const { getSetting } = await import('../../database');

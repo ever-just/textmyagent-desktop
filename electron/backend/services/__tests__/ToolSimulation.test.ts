@@ -1,6 +1,6 @@
 /**
- * Simulation tests for tool use flows: react_to_message, wait, react+wait,
- * normal response, contact allowlist, and tool enable/disable toggles.
+ * Simulation tests for tool use flows: wait, normal response,
+ * contact allowlist, and tool enable/disable toggles.
  *
  * These tests mock the LLM response and verify the full pipeline
  * from incoming message → tool execution → response delivery.
@@ -115,7 +115,6 @@ vi.mock('../PromptBuilder', () => ({
 vi.mock('../ToolRegistry', () => ({
   toolRegistry: {
     getEnabledDefinitions: vi.fn().mockReturnValue([
-      { name: 'react_to_message', description: 'Send tapback', inputSchema: {} },
       { name: 'wait', description: 'Skip response', inputSchema: {} },
     ]),
     executeToolCall: vi.fn(),
@@ -248,7 +247,7 @@ describe('Tool Simulation Tests', () => {
         inputTokens: 130,
         outputTokens: 35,
         stopReason: 'end_turn',
-        toolsUsed: ['react_to_message', 'wait'],
+        toolsUsed: ['wait'],
       } as any);
 
       const msg = createMessage('thanks!');
@@ -257,29 +256,29 @@ describe('Tool Simulation Tests', () => {
       // No text response sent
       expect(iMessageService.sendMessage).not.toHaveBeenCalled();
 
-      // Logged with both tools
+      // Logged with the wait tool
       expect(log).toHaveBeenCalledWith(
         'info',
         'Agent chose to wait \u2014 no text response sent',
         expect.objectContaining({
-          toolsUsed: 'react_to_message, wait',
+          toolsUsed: 'wait',
         })
       );
     });
   });
 
   // =========================================================================
-  // Scenario 3: React tool + text response (good news)
+  // Scenario 3: Text response for good news
   // =========================================================================
-  describe('Scenario 3: React + text response', () => {
-    it('should send text when LLM reacts AND responds', async () => {
-      // Simulate: User says "I got the job!" → LLM reacts with love + sends congrats
+  describe('Scenario 3: Good news → text response', () => {
+    it('should send text when LLM responds to good news', async () => {
+      // Simulate: User says "I got the job!" → LLM sends congrats
       vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: 'Congrats!! That is amazing news 🎉',
         inputTokens: 180,
         outputTokens: 55,
         stopReason: 'end_turn',
-        toolsUsed: ['react_to_message'],
+        toolsUsed: [],
       } as any);
 
       const msg = createMessage('I got the job!');
@@ -294,16 +293,16 @@ describe('Tool Simulation Tests', () => {
   });
 
   // =========================================================================
-  // Scenario 4: React + wait (acknowledgment — no text needed)
+  // Scenario 4: Wait-only acknowledgments (no text)
   // =========================================================================
-  describe('Scenario 4: React + wait (tapback only)', () => {
-    it('should NOT send text when LLM reacts + waits for "got it"', async () => {
+  describe('Scenario 4: Acknowledgments use wait (no text)', () => {
+    it('should NOT send text when LLM waits for "got it"', async () => {
       vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 110,
         outputTokens: 45,
         stopReason: 'end_turn',
-        toolsUsed: ['react_to_message', 'wait'],
+        toolsUsed: ['wait'],
       } as any);
 
       const msg = createMessage('got it');
@@ -312,13 +311,13 @@ describe('Tool Simulation Tests', () => {
       expect(iMessageService.sendMessage).not.toHaveBeenCalled();
     });
 
-    it('should NOT send text when LLM reacts + waits for "bye"', async () => {
+    it('should NOT send text when LLM waits for "bye"', async () => {
       vi.mocked(localLLMService.generateResponse).mockResolvedValue({
         content: '',
         inputTokens: 105,
         outputTokens: 42,
         stopReason: 'end_turn',
-        toolsUsed: ['react_to_message', 'wait'],
+        toolsUsed: ['wait'],
       } as any);
 
       const msg = createMessage('bye!');
@@ -504,56 +503,8 @@ describe('Contact Allowlist Simulation', () => {
 });
 
 // ===========================================================================
-// Tool Execution Unit Tests (react_to_message & wait)
+// Tool Execution Unit Tests (wait)
 // ===========================================================================
-describe('Tool Execution — react_to_message', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    for (const key of Object.keys(_settingsStore)) delete _settingsStore[key];
-  });
-
-  it('should send emoji as text for valid reaction types', async () => {
-    const { reactToMessage } = await import('../../tools/reactToMessage');
-
-    const context = { userId: '+11234567890', chatGuid: 'iMessage;-;+11234567890' };
-
-    // Test each reaction type
-    const reactions = ['love', 'like', 'dislike', 'laugh', 'emphasize', 'question'];
-    const emojis = ['\u2764\uFE0F', '\uD83D\uDC4D', '\uD83D\uDC4E', '\uD83D\uDE02', '\u203C\uFE0F', '\u2753'];
-
-    for (let i = 0; i < reactions.length; i++) {
-      vi.mocked(iMessageService.sendMessage).mockResolvedValue(true);
-      const result = await reactToMessage({ reaction: reactions[i] }, context);
-
-      expect(result).toContain(reactions[i]);
-      expect(iMessageService.sendMessage).toHaveBeenCalledWith(
-        'iMessage;-;+11234567890',
-        expect.any(String)
-      );
-    }
-  });
-
-  it('should throw error for invalid reaction type', async () => {
-    const { reactToMessage } = await import('../../tools/reactToMessage');
-    const context = { userId: '+11234567890', chatGuid: 'iMessage;-;+11234567890' };
-
-    await expect(
-      reactToMessage({ reaction: 'invalid' }, context)
-    ).rejects.toThrow('Invalid reaction');
-  });
-
-  it('should throw error when sendMessage fails', async () => {
-    const { reactToMessage } = await import('../../tools/reactToMessage');
-    const context = { userId: '+11234567890', chatGuid: 'iMessage;-;+11234567890' };
-
-    vi.mocked(iMessageService.sendMessage).mockResolvedValue(false);
-
-    await expect(
-      reactToMessage({ reaction: 'love' }, context)
-    ).rejects.toThrow('Failed to send reaction');
-  });
-});
-
 describe('Tool Execution — wait', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -614,34 +565,34 @@ describe('Decision Matrix — Full Message Flow Simulations', () => {
       expectText: 'My email is hello@example.com',
     },
     {
-      name: 'Acknowledgment "ok" → react + wait (no text)',
+      name: 'Acknowledgment "ok" → wait (no text)',
       userMessage: 'ok',
-      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
-      name: 'Gratitude "thanks!" → react + wait (no text)',
+      name: 'Gratitude "thanks!" → wait (no text)',
       userMessage: 'thanks!',
-      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
-      name: 'Good news → react + RESPOND',
+      name: 'Good news → RESPOND',
       userMessage: 'I passed my exam!',
-      llmResponse: { content: 'That is incredible!! So proud of you', toolsUsed: ['react_to_message'], stopReason: 'end_turn' },
+      llmResponse: { content: 'That is incredible!! So proud of you', toolsUsed: [], stopReason: 'end_turn' },
       expectSend: true,
       expectText: 'That is incredible!! So proud of you',
     },
     {
-      name: 'Funny message → react + wait',
+      name: 'Funny message → wait',
       userMessage: 'lol',
-      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
-      name: 'Goodbye → react + wait',
+      name: 'Goodbye → wait',
       userMessage: 'ttyl',
-      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
     {
@@ -665,9 +616,9 @@ describe('Decision Matrix — Full Message Flow Simulations', () => {
       expectText: 'Of course! What subject?',
     },
     {
-      name: 'Simple "k" → react + wait',
+      name: 'Simple "k" → wait',
       userMessage: 'k',
-      llmResponse: { content: '', toolsUsed: ['react_to_message', 'wait'], stopReason: 'end_turn' },
+      llmResponse: { content: '', toolsUsed: ['wait'], stopReason: 'end_turn' },
       expectSend: false,
     },
   ];

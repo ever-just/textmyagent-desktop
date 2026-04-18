@@ -8,6 +8,15 @@ import {
   Menu,
 } from 'electron';
 import path from 'path';
+// P0.4: initialize electron-log BEFORE any backend imports so early errors
+// (including bootstrap exceptions) are captured to
+// ~/Library/Logs/textmyagent-desktop/main.log
+import log from 'electron-log/main';
+log.transports.file.level = 'info';
+log.transports.file.maxSize = 10 * 1024 * 1024; // 10 MB per file
+log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
+log.initialize({ preload: true });
+
 import { startBackendServer, stopBackendServer } from './backend/server';
 import { initializeDatabase, closeDatabase, seedDefaultSettings } from './backend/database';
 import { registerAllTools } from './backend/tools';

@@ -1,6 +1,17 @@
 import { Response } from 'express';
 import type { SecuritySeverity } from './types';
 
+// P0.4: Lazy-load electron-log so unit tests (which import logger without a
+// running Electron app) don't blow up. The main process calls log.initialize()
+// in main.ts before anything imports this module.
+let _elog: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  _elog = require('electron-log');
+} catch {
+  _elog = null;
+}
+
 // In-memory log buffer (extracted to break circular dependency — fixes E1)
 export interface LogEntry {
   timestamp: string;
@@ -70,7 +81,20 @@ export function log(
   const entry: LogEntry = { timestamp: new Date().toISOString(), level, message, metadata };
   logBuffer.add(entry);
   console.log(`[${level.toUpperCase()}] ${message}`, metadata || '');
-  
+
+  // P0.4: forward to electron-log file transport when available (production).
+  // Tests don't bundle electron-log, so _elog is null and this is a no-op.
+  if (_elog) {
+    try {
+      const fn = _elog[level] || _elog.info;
+      if (typeof fn === 'function') {
+        fn(message, metadata ? JSON.stringify(metadata) : '');
+      }
+    } catch {
+      // Never let file-log failures break the caller.
+    }
+  }
+
   // Broadcast to SSE subscribers
   if (logSubscribers.size > 0) {
     const msg = `data: ${JSON.stringify(entry)}\n\n`;

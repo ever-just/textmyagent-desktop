@@ -1,14 +1,14 @@
 /**
- * Tests for raw tool call stripping (Gemma 4 workaround).
+ * Tests for tool-call artifact sanitization (Gemma 4 workaround).
  *
  * Covers:
- *   1. LocalLLMService.stripAndExecuteRawToolCalls — regex detection, tool
- *      execution fallback, and text cleanup.
- *   2. MessageFormatter sanitize layer — safety-net stripping of tool call
+ *   1. LocalLLMService.sanitizeToolCallArtifacts — regex detection and
+ *      text cleanup. Sanitize-only, no execution (see docs/RELIABILITY_IMPLEMENTATION.md P0.3).
+ *   2. MessageFormatter sanitize layer — safety-net stripping of tool-call
  *      artifacts that slip through.
- *   3. AgentService — empty-content-with-tools skip logic.
+ *   3. Static regex coverage + false-positive guards.
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -53,159 +53,135 @@ vi.mock('../PromptBuilder', () => ({
 import { LocalLLMService } from '../LocalLLMService';
 import { toolRegistry } from '../ToolRegistry';
 import { messageFormatter } from '../MessageFormatter';
-import { log } from '../../logger';
 
 // ---------------------------------------------------------------------------
-// 1. stripAndExecuteRawToolCalls
+// 1. sanitizeToolCallArtifacts — unit tests
 // ---------------------------------------------------------------------------
-describe('LocalLLMService.stripAndExecuteRawToolCalls', () => {
+describe('LocalLLMService.sanitizeToolCallArtifacts', () => {
   let service: LocalLLMService;
-  const ctx = { userId: 'test-user', chatGuid: 'iMessage;-;+15551234567' };
 
   beforeEach(() => {
     vi.clearAllMocks();
     service = new LocalLLMService();
   });
 
-  it('should return empty input unchanged', async () => {
-    expect(await service.stripAndExecuteRawToolCalls('', [], ctx)).toBe('');
+  it('returns empty input unchanged', () => {
+    expect(service.sanitizeToolCallArtifacts('')).toBe('');
   });
 
-  it('should return clean text unchanged', async () => {
+  it('returns clean text unchanged', () => {
     const text = 'Hello! How are you?';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(text, toolsUsed, ctx);
-    expect(result).toBe(text);
-    expect(toolsUsed).toEqual([]);
+    expect(service.sanitizeToolCallArtifacts(text)).toBe(text);
+  });
+
+  it('never calls toolRegistry.executeToolCall (sanitize-only)', () => {
+    const raw =
+      '<|tool_call>call: save_user_fact(params: {"content":"likes pizza"})<tool_call|>';
+    service.sanitizeToolCallArtifacts(raw);
     expect(toolRegistry.executeToolCall).not.toHaveBeenCalled();
   });
 
-  // --- Pattern 1: Delimited tool call ---
-  it('should strip delimited tool call and execute it', async () => {
-    const raw = '<|tool_call>call: save_user_fact(params: {"content":"likes pizza","type":"preference"})<tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('');
-    expect(toolsUsed).toContain('save_user_fact');
-    expect(toolRegistry.executeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: 'save_user_fact',
-        input: { content: 'likes pizza', type: 'preference' },
-      }),
-      ctx
-    );
+  // --- Pattern 1: Delimited tool call -------------------------------------
+  it('strips delimited <|tool_call>...<tool_call|> block', () => {
+    const raw =
+      '<|tool_call>call: save_user_fact(params: {"content":"likes pizza","type":"preference"})<tool_call|>';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('');
   });
 
-  // --- Pattern 2: Delimited variant with pipe characters ---
-  it('should strip <|tool_call|>...<|/tool_call|> variant', async () => {
-    const raw = '<|tool_call|>call: wait(params: {"reason":"no reply needed"})<|/tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('');
-    expect(toolsUsed).toContain('wait');
+  it('strips <|tool_call|>...<|/tool_call|> pipe variant', () => {
+    const raw =
+      '<|tool_call|>call: wait(params: {"reason":"no reply needed"})<|/tool_call|>';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('');
   });
 
-  // --- Mixed: text + tool call ---
-  it('should preserve normal text and strip only the tool call portion', async () => {
-    const raw = 'That sounds fun!\n<|tool_call>call: save_user_fact(params: {"content":"enjoys hiking","type":"preference"})<tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('That sounds fun!');
-    expect(toolsUsed).toContain('save_user_fact');
+  it('preserves normal text and strips only the delimited tool call', () => {
+    const raw =
+      'That sounds fun!\n<|tool_call>call: save_user_fact(params: {"content":"enjoys hiking"})<tool_call|>';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('That sounds fun!');
   });
 
-  // --- Pattern 3: Bare call: on its own line ---
-  it('should strip bare "call: tool(params: {...})" on its own line', async () => {
-    const raw = 'call: save_user_fact(params: {"content":"lives in NYC","type":"personal"})';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('');
-    expect(toolsUsed).toContain('save_user_fact');
+  // --- Pattern 2: Gemma fenced tool_code blocks ---------------------------
+  it('strips ```tool_code ... ``` fenced blocks (with set_reminder)', () => {
+    const raw =
+      'Sure, will do!\n```tool_code\nset_reminder(message="Call mom", due_at="2026-04-18T15:00:00Z")\n```';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('Sure, will do!');
   });
 
-  // --- Pattern 4: Token leak artifact <|"|"> ---
-  it('should clean <|"|"> token leak artifacts from JSON and response', async () => {
-    const raw = '<|tool_call>call: save_user_fact(params: {"content":<|"|>pizza<|"|>,"type":<|"|>preference<|"|>})<tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('');
-    // The JSON cleaning should have replaced <|"|"> with " before parsing
-    expect(toolsUsed).toContain('save_user_fact');
+  // --- Pattern 3: Bare whole-line tool-name calls -------------------------
+  it('strips bare "wait(reason: \\"goodbye\\")" on its own line (yesterday regression)', () => {
+    const raw = 'take care!\nwait(reason: "goodbye")';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('take care!');
   });
 
-  // --- Stray markers ---
-  it('should strip stray tool_call markers without content', async () => {
+  it('strips bare "react_to_message(params: {...})" even after removal (regression guard)', () => {
+    const raw = 'sure!\nreact_to_message(params: {reaction: "like"})';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('sure!');
+  });
+
+  it('strips bare "save_user_fact(content=..., type=...)" kwarg style', () => {
+    const raw = 'cool\nsave_user_fact(content="Weldon", type="personal")';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('cool');
+  });
+
+  it('strips bare "set_reminder(message=..., due_at=...)" line', () => {
+    const raw = 'okay\nset_reminder(message="Call mom", due_at="2026-04-18T15:00:00Z")';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('okay');
+  });
+
+  it('strips multiple bare tool calls on separate lines', () => {
+    const raw = [
+      'Nice to meet you, Weldon!',
+      'save_user_fact(content="Name is Weldon", type="personal")',
+      'wait(reason: "handled")',
+    ].join('\n');
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('Nice to meet you, Weldon!');
+  });
+
+  // --- False-positive guards: tool-name words in prose MUST NOT be stripped
+  it('does NOT strip "wait" used as a verb inside prose', () => {
+    const text = 'I had to wait about a minute for the bus';
+    expect(service.sanitizeToolCallArtifacts(text)).toBe(text);
+  });
+
+  it('does NOT strip "search_history" referenced in natural language', () => {
+    const text = 'please search_history for me when you get a sec';
+    expect(service.sanitizeToolCallArtifacts(text)).toBe(text);
+  });
+
+  it('does NOT strip a sentence that only contains the word "wait"', () => {
+    const text = 'wait really?';
+    expect(service.sanitizeToolCallArtifacts(text)).toBe(text);
+  });
+
+  it('does NOT strip "set_reminder" mentioned without parentheses', () => {
+    const text = 'can you set_reminder for 3pm tomorrow';
+    expect(service.sanitizeToolCallArtifacts(text)).toBe(text);
+  });
+
+  // --- Stray markers ------------------------------------------------------
+  it('strips stray tool_call markers without content', () => {
     const raw = 'Great talking to you! <|tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('Great talking to you!');
-    // No tool should be executed since there was no parseable call
-    expect(toolRegistry.executeToolCall).not.toHaveBeenCalled();
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('Great talking to you!');
   });
 
-  // --- Generic special token leak ---
-  it('should strip other leaked special tokens like eos markers', async () => {
-    // Build string with special tokens using concatenation to avoid XML parser issues
+  // --- Generic special-token leak ----------------------------------------
+  it('strips leaked <|eos|>-style special tokens', () => {
     const marker = ['<', '|', 'eos', '|', '>'].join('');
     const raw = 'Hello there ' + marker;
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('Hello there');
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('Hello there');
   });
 
-  // --- Duplicate prevention ---
-  it('should not duplicate tool name in toolsUsed if already present', async () => {
-    const raw = '<|tool_call>call: wait(params: {"reason":"test"})<tool_call|>';
-    const toolsUsed: string[] = ['wait']; // already present
-    await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    // Should still be exactly one 'wait'
-    expect(toolsUsed.filter(t => t === 'wait').length).toBe(1);
+  // --- Token leak inside delimited block ---------------------------------
+  it('strips the delimited block cleanly even when <|"|"> appears inside', () => {
+    const raw =
+      '<|tool_call>call: save_user_fact(params: {"content":<|"|>pizza<|"|>})<tool_call|>';
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('');
   });
 
-  // --- Malformed JSON ---
-  it('should strip the text even if JSON params are malformed', async () => {
+  // --- Malformed JSON inside delimited block -----------------------------
+  it('strips the delimited block even when JSON params are malformed', () => {
     const raw = '<|tool_call>call: save_user_fact(params: {INVALID JSON})<tool_call|>';
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('');
-    // Tool execution was still attempted (with empty params due to parse failure)
-    expect(toolRegistry.executeToolCall).toHaveBeenCalled();
-  });
-
-  // --- Tool execution failure should not throw ---
-  it('should not throw if tool execution fails', async () => {
-    vi.mocked(toolRegistry.executeToolCall).mockRejectedValueOnce(new Error('tool crashed'));
-    const raw = '<|tool_call>call: save_user_fact(params: {"content":"test"})<tool_call|>';
-    const toolsUsed: string[] = [];
-
-    // Should not throw
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-    expect(result).toBe('');
-  });
-
-  // --- Multiple tool calls ---
-  it('should handle multiple tool calls in one response', async () => {
-    const raw = [
-      '<|tool_call>call: save_user_fact(params: {"content":"name is John","type":"personal"})<tool_call|>',
-      'Nice to meet you John!',
-      '<|tool_call>call: react_to_message(params: {"reaction":"love"})<tool_call|>',
-    ].join('\n');
-    const toolsUsed: string[] = [];
-    const result = await service.stripAndExecuteRawToolCalls(raw, toolsUsed, ctx);
-
-    expect(result).toBe('Nice to meet you John!');
-    expect(toolsUsed).toContain('save_user_fact');
-    // react_to_message should also be detected from second delimited block
-    expect(toolRegistry.executeToolCall).toHaveBeenCalledTimes(2);
+    expect(service.sanitizeToolCallArtifacts(raw)).toBe('');
   });
 });
 
@@ -213,29 +189,41 @@ describe('LocalLLMService.stripAndExecuteRawToolCalls', () => {
 // 2. MessageFormatter sanitize safety net
 // ---------------------------------------------------------------------------
 describe('MessageFormatter — tool call artifact safety net', () => {
-  it('should strip tool call text from formatted output', () => {
-    const input = 'Hey!' + '\n<|tool_call>call: wait(params: {})<tool_call|>';
+  it('strips tool-call text from formatted output', () => {
+    const input = 'Hey!\n<|tool_call>call: wait(params: {})<tool_call|>';
     const result = messageFormatter.format(input);
-    // The chunks should not contain any tool call artifacts
     for (const chunk of result.chunks) {
       expect(chunk).not.toMatch(/tool_call/);
       expect(chunk).not.toMatch(/call:/);
     }
   });
 
-  it('should return empty chunks for tool-call-only response', () => {
+  it('strips bare tool-call lines via MessageFormatter (yesterday regression)', () => {
+    const input = 'take care!\nwait(reason: "goodbye")';
+    const result = messageFormatter.format(input);
+    for (const chunk of result.chunks) {
+      expect(chunk).not.toMatch(/wait\s*\(/);
+    }
+  });
+
+  it('returns empty chunk for a tool-call-only response', () => {
     const input = '<|tool_call>call: save_user_fact(params: {"content":"test"})<tool_call|>';
     const result = messageFormatter.format(input);
-    // After sanitization the content is empty
     expect(result.chunks.length).toBeLessThanOrEqual(1);
     if (result.chunks.length === 1) {
       expect(result.chunks[0].trim()).toBe('');
     }
   });
+
+  it('leaves prose containing tool-name words unchanged', () => {
+    const input = 'I had to wait about a minute';
+    const result = messageFormatter.format(input);
+    expect(result.chunks[0]).toBe('I had to wait about a minute');
+  });
 });
 
 // ---------------------------------------------------------------------------
-// 3. Static regex pattern tests (unit-level)
+// 3. Static regex coverage
 // ---------------------------------------------------------------------------
 describe('RAW_TOOL_CALL_PATTERNS — regex coverage', () => {
   const patterns = LocalLLMService.RAW_TOOL_CALL_PATTERNS;
@@ -245,24 +233,38 @@ describe('RAW_TOOL_CALL_PATTERNS — regex coverage', () => {
     '<|tool_call|>call: foo(params: {})<|/tool_call|>',
     '<tool_call>bar<tool_call>',
     '<|tool_call|>',
+    'wait(reason: "ok")',
+    'react_to_message(params: {reaction: "like"})',
+    'save_user_fact(content="Weldon", type="personal")',
+    'set_reminder(message="x", due_at="2026-01-01T00:00:00Z")',
+    '```tool_code\nset_reminder(message="x")\n```',
   ];
 
   const shouldNotMatch = [
     'normal text without any markers',
     'I called my friend yesterday',
     'the tool was useful',
+    'I had to wait about a minute',
+    'please search_history for me',
+    'let me set_reminder tomorrow',
   ];
 
   for (const input of shouldMatch) {
-    it('should match: ' + JSON.stringify(input.substring(0, 50)), () => {
-      const matched = patterns.some(p => { p.lastIndex = 0; return p.test(input); });
+    it('matches: ' + JSON.stringify(input.substring(0, 50)), () => {
+      const matched = patterns.some((p) => {
+        p.lastIndex = 0;
+        return p.test(input);
+      });
       expect(matched).toBe(true);
     });
   }
 
   for (const input of shouldNotMatch) {
-    it('should NOT match: ' + JSON.stringify(input.substring(0, 50)), () => {
-      const matched = patterns.some(p => { p.lastIndex = 0; return p.test(input); });
+    it('does NOT match: ' + JSON.stringify(input.substring(0, 50)), () => {
+      const matched = patterns.some((p) => {
+        p.lastIndex = 0;
+        return p.test(input);
+      });
       expect(matched).toBe(false);
     });
   }

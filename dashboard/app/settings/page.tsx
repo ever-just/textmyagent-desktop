@@ -54,7 +54,6 @@ export default function SettingsPage() {
   const [searchHistory, setSearchHistory] = useState(true);
   const [reminders, setReminders] = useState(true);
   const [triggers, setTriggers] = useState(true);
-  const [reactions, setReactions] = useState(true);
   const [waitTool, setWaitTool] = useState(true);
 
   // Contact allowlist state
@@ -108,7 +107,6 @@ export default function SettingsPage() {
       setSearchHistory(s['tools.searchHistory'] ?? true);
       setReminders(s['tools.reminders'] ?? true);
       setTriggers(s['tools.triggers'] ?? true);
-      setReactions(s['tools.reactions'] ?? true);
       setWaitTool(s['tools.waitTool'] ?? true);
       // Contact allowlist
       setReplyMode(s['agent.replyMode'] ?? 'everyone');
@@ -155,7 +153,6 @@ export default function SettingsPage() {
         'tools.searchHistory': searchHistory,
         'tools.reminders': reminders,
         'tools.triggers': triggers,
-        'tools.reactions': reactions,
         'tools.waitTool': waitTool,
         // Contact allowlist
         'agent.replyMode': replyMode,
@@ -613,7 +610,6 @@ export default function SettingsPage() {
                 </div>
                 <div className="border-t border-[var(--color-border)] pt-3">
                   <p className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-2">Interaction Tools</p>
-                  <ToggleRow label="Reactions (tapback-style emoji responses)" checked={reactions} onChange={setReactions} />
                   <ToggleRow label="Wait (agent can choose not to reply)" checked={waitTool} onChange={setWaitTool} />
                 </div>
               </>

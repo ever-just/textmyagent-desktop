@@ -4,6 +4,22 @@
 > **Date:** April 2026  
 > **Target:** 10,000 users, 100 conversations/hour, single Mac  
 
+## Implementation Status (v2.5.0)
+
+| Phase | Status | Ships in |
+|-------|--------|----------|
+| 1A — Adaptive pool sizing by RAM | ✅ | v2.4.0 |
+| 1B — Idle session TTL (10 min) | ✅ | v2.4.0 |
+| 1C — Prompt section ordering lock + test | ✅ | **v2.5.0** |
+| 2A — Eviction hook (`onSessionEvicted`) | ✅ | v2.4.0 |
+| 2B — `generateSummary()` (ephemeral session) | ✅ | v2.4.0 |
+| 2C — Fact extraction piggyback on eviction | ✅ | **v2.5.0** |
+| 2D — Cold-start summary recall | ✅ | v2.4.0 |
+| 3A — Global priority queue | ❌ skipped (per-chat design is correct per §3.4) |
+| 3B — Message coalescing on queue drain | ✅ | **v2.5.0** |
+| 3C — `/api/dashboard/metrics` endpoint | ✅ | v2.4.0 |
+| 4 — Advanced (sqlite-vec, hot-swap, …) | ⏸ deferred |
+
 ---
 
 ## 1. Executive Summary

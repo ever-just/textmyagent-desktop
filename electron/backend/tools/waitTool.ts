@@ -6,7 +6,7 @@ import type { ToolCallContext } from '../services/ToolRegistry';
  *
  * Use cases:
  * - User sent a simple acknowledgment ("ok", "got it", "k")
- * - User sent gratitude ("thanks", "ty") — pair with react_to_message
+ * - User sent gratitude ("thanks", "ty")
  * - User sent a goodbye ("bye", "ttyl")
  * - User sent a tapback reaction
  * - No response is needed for the current message
@@ -24,7 +24,7 @@ export async function waitTool(
 
 export const waitToolDefinition = {
   name: 'wait',
-  description: 'Choose not to send any text response to the user. Call this tool when replying with text would be unnecessary or awkward — for example, after simple acknowledgments (ok, got it, k), gratitude (thanks, ty), goodbyes (bye, ttyl, gn), or when the user sent a tapback reaction. This tool is commonly paired with react_to_message: first react with a tapback, then call wait to skip the text reply. When in doubt about whether to respond, prefer sending a short text reply over calling wait — silence should be intentional, not a default. The reason parameter should briefly explain why no text response is needed.',
+  description: 'Choose not to send any text response to the user. Call this tool when replying with text would be unnecessary or awkward — for example, after simple acknowledgments (ok, got it, k), gratitude (thanks, ty), goodbyes (bye, ttyl, gn), or when the user sent a tapback reaction. When in doubt about whether to respond, prefer sending a short text reply over calling wait — silence should be intentional, not a default. The reason parameter should briefly explain why no text response is needed.',
   type: 'custom' as const,
   enabled: true,
   inputSchema: {
@@ -32,7 +32,7 @@ export const waitToolDefinition = {
     properties: {
       reason: {
         type: 'string',
-        description: 'Brief explanation of why waiting (e.g., "user said thanks", "acknowledgment only", "reacted instead").',
+        description: 'Brief explanation of why waiting (e.g., "user said thanks", "acknowledgment only", "goodbye").',
       },
     },
     required: ['reason'],

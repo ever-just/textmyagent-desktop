@@ -9,9 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 - Multi-language support
-- Message coalescing (Phase 5.1 in scale plan)
+- Migration v9 (`memory_events`, `agent_events` tables) — RELIABILITY Phase 1 §4.1
+- Dedicated ephemeral `LlamaContext` so summarization survives sequence exhaustion — RELIABILITY §4.2
+- Unified default prompts source (`defaultPrompts.ts`) to end PromptBuilder/DB drift — RELIABILITY §4.5
 - Prefix cache empirical verification benchmarks
 - Optional experimental KV cache quantization (dev-mode only)
+
+## [2.5.0] - 2026-04-17
+
+**Reliability hotfixes + scale completions.** Combines the RELIABILITY Phase 0 hotfixes surfaced by the 300-message v2.4.0 trial (tool-call leaks, `set_reminder` crash, no file logging) with the remaining SCALE plan items (prompt-cache ordering lock, fact extraction on eviction, message coalescing). See `docs/RELIABILITY_IMPLEMENTATION.md` and `docs/SCALE_ARCHITECTURE_PLAN.md` for full context.
+
+### Added
+
+- **Message coalescing on queue drain (SCALE Phase 3B)** — When a user fires multiple iMessages while the agent is mid-generation, the queued fragments are now merged into one combined prompt on drain. The LLM replies once to the full thought instead of N times to each fragment. `AgentService.coalesceQueuedMessages()` joins non-empty texts with `\n` and preserves the latest message's `guid`/`handleId`/`chatGuid` for dedup + DB correctness.
+- **Fact extraction on session eviction (SCALE Phase 2C)** — `LocalLLMService.extractFactsFromTranscript()` runs on the same eviction event as auto-summarization, asking the model for a JSON array of concrete user facts and saving each via `memoryService.saveFact(..., 'auto_extracted', 0.7)`. Parser tolerates markdown fences / prose-wrapped JSON; dedupes case-insensitively; caps at 10 facts × 200 chars. Gated on `memory.enableFactExtraction` setting (default on). Addresses RELIABILITY §4.3 partially — full per-message extraction deferred to v2.6.0.
+- **Prompt section ordering invariant (SCALE Phase 1C)** — `PromptBuilder.buildSections()` extracted as a separate testable method with explicit **ORDERING INVARIANT** docblock: all `cacheable: true` sections must precede all `cacheable: false` sections so node-llama-cpp can reuse the KV-cache prefix. 3 new regression tests lock the order `IDENTITY → PERSONA → GUIDELINES → SAFETY → FORMAT → TOOL_USAGE`.
+- **File-transport logger (RELIABILITY P0.4)** — `electron-log/main` initialized before any backend imports in `@/Users/cloudaistudio/Documents/textmyagent-desktop/electron/main.ts` so bootstrap errors are captured. Default destination: `~/Library/Logs/textmyagent-desktop/main.log`; 10 MB max per file; backend `log()` function now mirrors all levels to the file transport.
+- **`SetReminder.test.ts`** — 8 new tests covering valid insert (both `due_at` and `scheduled_at` populated), past-date rejection, >1-year rejection, missing message rejection, and round-trip via `ReminderService.getUpcomingReminders()`.
+- **14 new regression tests** across `ScaleEfficiency.test.ts` (`parseFactsJson` edge cases + structural assertions) and `CoreBehavior.test.ts` (coalescing end-to-end + unit tests).
+
+### Changed
+
+- **Sanitize-only tool-call scrub, raw execute path removed (RELIABILITY P0.3)** — Previously the LocalLLMService "stripped and executed" raw tool-call artifacts as a fallback when Gemma 4's function-calling path broke, which occasionally double-fired. Now text scrubbing is the only path; `LocalLLMService` and `MessageFormatter` share a hardened regex list covering `<|tool_call>` delimited blocks (both pipe variants), fenced `tool_code` blocks, `call: name(params: {...})` invocations, bare whole-line `name(...)` invocations (known names only), and stray special-token markers. Whole-line `^...$` anchoring prevents stripping legitimate prose that mentions a tool name.
+- **`set_reminder` INSERT now populates both `due_at` and `scheduled_at` (RELIABILITY P0.2)** — Migration v7 added `scheduled_at` as `NOT NULL` but the tool only bound `due_at`, causing every reminder call to throw `NOT NULL constraint failed: reminders.scheduled_at` and the agent to hallucinate success to the user. Fixed by binding the same ISO timestamp to both columns.
+
+### Removed
+
+- **`react_to_message` tool (RELIABILITY P0.1)** — macOS Messages.app doesn't expose real tapback reactions via AppleScript, so the tool was falling back to sending the emoji as a text message anyway. Removed the tool, its settings row (`tools.reactions`), the dashboard toggle, the ToolRegistry entry, and the prompt mentions. Inbound tapback-filter logic in `iMessageService` is preserved — we still correctly ignore tapback reactions from users.
+
+### Fixed
+
+- **Silent tool-call text leaks to iMessage** — Bare `wait(reason: "goodbye")`, `save_user_fact(content=...)`, and fenced `tool_code` blocks that Gemma 4 sometimes emits as plain text are now scrubbed before send. Test suite pins every exact leak string observed in yesterday's 300-message trial.
+- **`set_reminder` 1/1 failure rate** — Was throwing on every call since v2.4.0; now persists correctly and `ReminderService.getUpcomingReminders()` returns the row.
+- **Missing file logs** — `~/Library/Logs/textmyagent-desktop/main.log` was empty; now captures every `log()` call including bootstrap errors for forensic debugging.
+
+### Documentation
+
+- **`docs/RELIABILITY_IMPLEMENTATION.md`** (new) — 6 root causes from the v2.4.0 trial, 3-phase fix plan (hotfix → memory → observability), completion tracker showing what shipped in v2.5.0 vs. what's deferred.
+- **`docs/SCALE_ARCHITECTURE_PLAN.md`** — Added Implementation Status table at the top showing which phase items shipped in v2.4.0 vs v2.5.0 vs skipped/deferred.
+- **CHANGELOG [Unreleased] → Planned** — Refreshed to reflect the actual next-step backlog (migration v9, ephemeral context, unified prompts) instead of items now shipped.
 
 ## [2.4.0] - 2026-04-16
 

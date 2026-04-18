@@ -300,6 +300,62 @@ describe('LocalLLMService pool & eviction (Phase 2)', () => {
     });
   });
 
+  describe('parseFactsJson (Phase 2C)', () => {
+    it('parses a plain JSON array of strings', () => {
+      const out = (service as any).parseFactsJson('["name is Alex","lives in NYC"]');
+      expect(out).toEqual(['name is Alex', 'lives in NYC']);
+    });
+
+    it('strips markdown code fences', () => {
+      const raw = '```json\n["likes coffee", "works at Google"]\n```';
+      const out = (service as any).parseFactsJson(raw);
+      expect(out).toEqual(['likes coffee', 'works at Google']);
+    });
+
+    it('extracts the first JSON array when surrounded by prose', () => {
+      const raw = 'Sure, here are the facts: ["name is Sam"] — hope that helps.';
+      const out = (service as any).parseFactsJson(raw);
+      expect(out).toEqual(['name is Sam']);
+    });
+
+    it('returns [] when no JSON array is present', () => {
+      const out = (service as any).parseFactsJson('No facts found.');
+      expect(out).toEqual([]);
+    });
+
+    it('returns [] on malformed JSON', () => {
+      const out = (service as any).parseFactsJson('["unclosed');
+      expect(out).toEqual([]);
+    });
+
+    it('filters non-string entries and deduplicates case-insensitively', () => {
+      const raw = '["Likes coffee", "likes coffee", 42, null, "works at ACME"]';
+      const out = (service as any).parseFactsJson(raw);
+      expect(out).toEqual(['Likes coffee', 'works at ACME']);
+    });
+
+    it('drops entries shorter than 3 chars and caps length at 200', () => {
+      const long = 'x'.repeat(300);
+      const raw = JSON.stringify(['ok', 'hi!', long]);
+      const out = (service as any).parseFactsJson(raw);
+      expect(out).toHaveLength(2);
+      expect(out[0]).toBe('hi!');
+      expect(out[1].length).toBe(200);
+    });
+
+    it('caps output at 10 facts', () => {
+      const many = Array.from({ length: 20 }, (_, i) => `fact number ${i}`);
+      const raw = JSON.stringify(many);
+      const out = (service as any).parseFactsJson(raw);
+      expect(out).toHaveLength(10);
+    });
+
+    it('returns [] when parsed JSON is not an array', () => {
+      const out = (service as any).parseFactsJson('{"a": 1}');
+      expect(out).toEqual([]);
+    });
+  });
+
   describe('getPoolStats (Phase 5.4)', () => {
     it('returns current pool size + max + entry ages', () => {
       const now = Date.now();
@@ -411,6 +467,29 @@ describe('Structural invariants (Phase 1-5)', () => {
     );
     expect(source).toContain('localLLMService.onSessionEvicted(');
     expect(source).toContain('summarizeEvictedSession');
+  });
+
+  it('AgentService coalesces queued messages on drain (Phase 3B)', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../AgentService.ts'),
+      'utf-8'
+    );
+    expect(source).toContain('coalesceQueuedMessages');
+    expect(source).toContain('Coalescing queued messages into a single prompt');
+  });
+
+  it('AgentService auto-extracts facts on eviction (Phase 2C)', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../AgentService.ts'),
+      'utf-8'
+    );
+    expect(source).toContain('extractFactsFromTranscript');
+    expect(source).toContain("'memory.enableFactExtraction'");
+    expect(source).toContain("'auto_extracted'");
   });
 
   it('AgentService loads conversation summary on cold-start (Phase 5.3)', async () => {

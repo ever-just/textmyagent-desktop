@@ -131,6 +131,41 @@ export class AgentService extends EventEmitter {
         preview: summary.substring(0, 120),
       });
 
+      // Phase 2C: Piggyback fact extraction on the same eviction event.
+      // Runs AFTER summary is persisted so a failure here doesn't lose the summary.
+      // Gated on memory.enableFactExtraction (default: on).
+      if (ctx.userHandle && getSettingBool('memory.enableFactExtraction', true)) {
+        try {
+          const facts = await localLLMService.extractFactsFromTranscript(transcript);
+          if (facts.length > 0) {
+            let saved = 0;
+            for (const fact of facts) {
+              try {
+                memoryService.saveFact(ctx.userHandle, fact, 'general', 'auto_extracted', 0.7);
+                saved++;
+              } catch (err) {
+                log('debug', 'saveFact skipped (likely duplicate)', {
+                  userHandle: ctx.userHandle,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+            log('info', 'Auto-extracted facts saved on eviction', {
+              chatGuid,
+              userHandle: ctx.userHandle,
+              extracted: facts.length,
+              saved,
+            });
+          }
+        } catch (err) {
+          // Non-fatal — summary is already persisted
+          log('warn', 'Fact extraction failed on eviction', {
+            chatGuid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       return summary;
     } catch (err) {
       // Non-fatal: summarization errors must not break the agent
@@ -619,11 +654,16 @@ export class AgentService extends EventEmitter {
       this.processingQueue.delete(message.guid);
       this.chatLocks.delete(chatGuid);
 
-      // Process next queued message for this chat, if any
+      // Process next queued message for this chat, if any.
+      // Phase 3B: coalesce — if the user fired multiple messages while we were busy,
+      // merge them into one so the LLM sees the full thought instead of replying N times
+      // to fragments. Only applies to the queued batch; the currently-processed message
+      // is already done. Carries the latest message's metadata (guid/timestamp/chatGuid)
+      // with a combined text body.
       const queue = this.chatQueues.get(chatGuid);
       if (queue && queue.length > 0) {
-        const next = queue.shift()!;
-        if (queue.length === 0) this.chatQueues.delete(chatGuid);
+        this.chatQueues.delete(chatGuid);
+        const next = this.coalesceQueuedMessages(queue);
         this.handleIncomingMessage(next).catch(err =>
           log('error', 'Error processing queued message', { error: err.message })
         );
@@ -632,6 +672,47 @@ export class AgentService extends EventEmitter {
 
     // Evict stale conversation contexts to prevent memory leak (fixes D3)
     this.evictStaleConversations();
+  }
+
+  /**
+   * Phase 3B: Coalesce a backlog of same-chat messages into a single IMessage.
+   *
+   * When a user fires a burst (e.g. 3 short texts in a row) while we're mid-generation,
+   * responding to each fragment individually produces redundant replies and wastes the
+   * LLM budget. Instead we merge the queued texts into one combined prompt, preserving
+   * the latest message's metadata (guid, timestamp, chatGuid, handleId) so downstream
+   * dedup + DB write logic stays correct.
+   *
+   * - Single-entry queue: returns the message unchanged.
+   * - Empty-text fragments are skipped when joining.
+   * - Combined text is joined with '\n' so the LLM can see each bubble separately.
+   *
+   * Exposed for unit tests; called from the queue-drain path in the finally block.
+   */
+  coalesceQueuedMessages(queue: IMessage[]): IMessage {
+    if (queue.length === 0) {
+      throw new Error('coalesceQueuedMessages requires a non-empty queue');
+    }
+    if (queue.length === 1) return queue[0];
+
+    const latest = queue[queue.length - 1];
+    const parts = queue
+      .map((m) => (m.text || '').trim())
+      .filter((t) => t.length > 0);
+    const combinedText = parts.join('\n');
+
+    log('info', 'Coalescing queued messages into a single prompt', {
+      chatGuid: latest.chatGuid,
+      mergedCount: queue.length,
+      combinedLength: combinedText.length,
+      keptGuid: latest.guid,
+    });
+
+    // Shallow-clone so we don't mutate the original IMessage objects (tests inspect them).
+    return {
+      ...latest,
+      text: combinedText,
+    };
   }
 
   /**

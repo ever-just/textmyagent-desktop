@@ -240,7 +240,7 @@ describe('SIM-1: Tool call text leak prevention', () => {
 
   it('should NOT send raw save_user_fact tool call text to the user', async () => {
     // Simulate: LLM returns only a raw tool-call token (save_user_fact)
-    // After stripAndExecuteRawToolCalls in LLM service, content should be ''
+    // After sanitizeToolCallArtifacts in LLM service, content should be ''
     // and toolsUsed should include 'save_user_fact'.
     // AgentService should then skip sending.
     vi.mocked(localLLMService.generateResponse).mockResolvedValue(
@@ -282,7 +282,7 @@ describe('SIM-1: Tool call text leak prevention', () => {
 
   it('should handle wait tool with empty content (no message sent)', async () => {
     vi.mocked(localLLMService.generateResponse).mockResolvedValue(
-      llmResponse('', ['react_to_message', 'wait'], 200) as any
+      llmResponse('', ['wait'], 200) as any
     );
 
     const m = msg('ok thanks');
@@ -295,7 +295,7 @@ describe('SIM-1: Tool call text leak prevention', () => {
 
   it('should strip tool artifacts that leak through formatter safety net', async () => {
     // Simulate: LLM returned text WITH residual tool call tokens
-    // (as if stripAndExecuteRawToolCalls partially missed something)
+    // (as if sanitizeToolCallArtifacts partially missed something)
     const leakyContent = 'Sure thing! <|tool_call>call: wait(params: {})<tool_call|>';
     vi.mocked(localLLMService.generateResponse).mockResolvedValue(
       llmResponse(leakyContent, [], 350) as any
@@ -641,10 +641,10 @@ describe('SIM-MATRIX: Realistic conversation flows', () => {
       expectSentContains: 'Jordan',
     },
     {
-      name: 'User sends "ok" → react + wait, nothing sent',
+      name: 'User sends "ok" → wait, nothing sent',
       userMessage: 'ok',
       llmContent: '',
-      llmTools: ['react_to_message', 'wait'],
+      llmTools: ['wait'],
       expectSendCount: 0,
     },
     {
@@ -662,10 +662,10 @@ describe('SIM-MATRIX: Realistic conversation flows', () => {
       expectSendCount: 1,
     },
     {
-      name: 'User says thanks → react only, no text',
+      name: 'User says thanks → wait, no text',
       userMessage: 'thanks!',
       llmContent: '',
-      llmTools: ['react_to_message', 'wait'],
+      llmTools: ['wait'],
       expectSendCount: 0,
     },
   ];
