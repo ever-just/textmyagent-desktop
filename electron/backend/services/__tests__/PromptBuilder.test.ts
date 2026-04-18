@@ -158,7 +158,7 @@ describe('PromptBuilder', () => {
   describe('section ordering invariant (Phase 1C)', () => {
     // Cacheable (static) sections MUST precede any non-cacheable (dynamic) section
     // so node-llama-cpp can reuse the KV-cache prefix across requests.
-    const assertCacheableBeforeDynamic = (sections: { tag: string; cacheable: boolean }[]) => {
+    const assertCacheableBeforeDynamic = (sections: { tag: string; cacheable?: boolean }[]) => {
       let seenDynamic = false;
       for (const s of sections) {
         if (!s.cacheable) {
