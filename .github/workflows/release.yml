@@ -49,13 +49,19 @@ jobs:
 
       - name: Build custom llama.cpp for Gemma 4
         run: |
-          # Clone llama.cpp directly into the path node-llama-cpp expects
+          # Pin llama.cpp to the tag node-llama-cpp 3.18.1 expects.
+          # Source of truth: node_modules/node-llama-cpp/llama/llama.cpp.info.json.
+          # Cloning `main` instead (as we did previously) breaks builds when upstream
+          # llama.cpp moves ahead of node-llama-cpp's bindings — e.g. the b8808→b8850+
+          # drift that broke v2.5.0 CI with C++17 template errors.
+          LLAMA_TAG="b8808"
           LLAMA_DIR="node_modules/node-llama-cpp/llama/llama.cpp"
           rm -rf "$LLAMA_DIR"
           mkdir -p "$(dirname "$LLAMA_DIR")"
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          # Create the info file node-llama-cpp checks (isLlamaCppRepoCloned)
-          echo '{"tag": "latest"}' > "node_modules/node-llama-cpp/llama/llama.cpp.info.json"
+          git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+          # Match the info file format node-llama-cpp validates (isLlamaCppRepoCloned)
+          printf '{"tag": "%s", "llamaCppGithubRepo": "ggml-org/llama.cpp"}\n' "$LLAMA_TAG" \
+            > "node_modules/node-llama-cpp/llama/llama.cpp.info.json"
           npx --no node-llama-cpp source build --gpu metal
 
       - name: Build app
@@ -101,11 +107,14 @@ jobs:
 
       - name: Build custom llama.cpp for Gemma 4
         run: |
+          # Same pin as arm64 job — see that job for rationale.
+          LLAMA_TAG="b8808"
           LLAMA_DIR="node_modules/node-llama-cpp/llama/llama.cpp"
           rm -rf "$LLAMA_DIR"
           mkdir -p "$(dirname "$LLAMA_DIR")"
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
-          echo '{"tag": "latest"}' > "node_modules/node-llama-cpp/llama/llama.cpp.info.json"
+          git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp.git "$LLAMA_DIR"
+          printf '{"tag": "%s", "llamaCppGithubRepo": "ggml-org/llama.cpp"}\n' "$LLAMA_TAG" \
+            > "node_modules/node-llama-cpp/llama/llama.cpp.info.json"
           npx --no node-llama-cpp source build --gpu metal
 
       - name: Build app
