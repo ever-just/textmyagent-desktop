@@ -1,3 +1,10 @@
+> ## ⛔️ ARCHIVED — not maintained
+>
+> This repository is read-only. It is kept for reference and history.
+> TextMyAgent desktop client (2026). Superseded by imessage.lol. The landing page textmyagent.app is still up.
+>
+> Archived 2026-09-04.
+
 <div align="center">
   <img src="resources/icons/icon.png" alt="TextMyAgent" width="140" height="140" style="border-radius: 28px;">
   <h1>TextMyAgent Desktop</h1>
